@@ -344,7 +344,7 @@ class Precipitation(Scene):
         colour = (0.80, 0.88, 1.00) if snowing else (0.20, 0.55, 1.00)
 
         for d in self.drops:
-            d[1] += speed / FPS
+            d[1] += speed / max(s.get('_fps', FPS), 1.0)
             if d[1] > N + 1:
                 d[0] = np.random.uniform(0, N)
                 d[1] = np.random.uniform(-2.0, -0.2)
@@ -491,9 +491,10 @@ class LedDisplay:
 
     CROSSFADE = 1.3
 
-    def __init__(self, station, cycle_s: float = 0.4):
+    def __init__(self, station, cycle_s: float = 0.4, fps: float = FPS):
         self.station = station
         self.cycle_s = float(cycle_s)
+        self.fps = float(np.clip(fps, 4.0, 30.0))
         self.enabled = True
         self._stop = asyncio.Event()
         self._task = None
@@ -540,6 +541,7 @@ class LedDisplay:
             "forecast": series,
             "health": self.station.monitor.health.overall,
             "retrain": bool(self.station.monitor.retrain_requested),
+            "_fps": self.fps,
         }
 
     def _brightness(self, s: Dict) -> float:
@@ -575,7 +577,7 @@ class LedDisplay:
         return self.alert if self._alerting else self.scenes[self._idx]
 
     async def _run(self) -> None:
-        period = 1.0 / FPS
+        period = 1.0 / self.fps
         t0 = time.monotonic()
         while not self._stop.is_set():
             frame_start = time.monotonic()

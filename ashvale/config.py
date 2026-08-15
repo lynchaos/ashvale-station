@@ -118,6 +118,11 @@ class ServerConfig:
     port: int = 8000
     led_enabled: bool = True
     led_cycle_s: float = 0.4
+    # Matrix frame rate. 24 is smooth and costs about 11% of one core on a
+    # Zero 2 W. 16 is still fluid and roughly a third cheaper; below about 12
+    # the crossfades and sub-pixel motion start to judder, which defeats the
+    # point. Set 0 to keep the panel enabled but static-cheap.
+    led_fps: float = 24.0
 
 
 @dataclass

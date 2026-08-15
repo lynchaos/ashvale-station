@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
     station.sample_once()
     station.start()
     if CONFIG.server.led_enabled:
-        display = LedDisplay(station, CONFIG.server.led_cycle_s)
+        display = LedDisplay(station, CONFIG.server.led_cycle_s, CONFIG.server.led_fps)
         display.start()
     try:
         yield
