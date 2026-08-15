@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The dashboard: four tabs, one viewport, no scrolling.
+"""The dashboard: five tabs, one viewport, no scrolling.
 
 Layout contract. The page is a fixed three-row grid pinned to the
 viewport height: header, tab bar, then a content region that takes the
@@ -49,6 +49,8 @@ DASHBOARD_HTML = r"""
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ashvale Station</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
@@ -120,14 +122,26 @@ DASHBOARD_HTML = r"""
   <nav role="tablist" class="glass rounded-2xl p-1.5 flex gap-1.5 overflow-x-auto">
     <button role="tab" data-tab="live"     aria-selected="true"  class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Live</button>
     <button role="tab" data-tab="history"  aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">History</button>
-    <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models and calibration</button>
+    <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models and Calibration</button>
+    <button role="tab" data-tab="nerd"     aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Stats for Nerds</button>
     <button role="tab" data-tab="methods"  aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Methods</button>
   </nav>
 
   <main class="min-h-0">
 
   <!-- ---------------- LIVE ---------------- -->
-  <section id="pane-live" class="pane active h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr_auto_auto]">
+  <section id="pane-live" class="pane active h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_auto_1fr_auto]">
+
+    <div class="glass rounded-2xl p-4 lg:col-span-4 shrink-0">
+      <div class="flex items-center justify-between mb-2">
+        <div>
+          <h2 class="text-sm font-bold">Seven day outlook</h2>
+          <p class="text-[10px] text-slate-500 font-mono">climatology plus decaying anomaly, not a synoptic forecast</p>
+        </div>
+        <span id="o-badge" class="px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono uppercase font-semibold">warming up</span>
+      </div>
+      <div id="o-strip" class="grid grid-cols-4 sm:grid-cols-7 gap-2"></div>
+    </div>
 
     <div class="glass rounded-2xl p-4 flex flex-col justify-between">
       <div class="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-amber-400">
@@ -218,7 +232,9 @@ DASHBOARD_HTML = r"""
       </div>
       <div class="flex-1 min-h-0 space-y-2 pr-1">
         <div class="text-center">
+          <div id="c-icon" class="flex justify-center mb-0.5"></div>
           <div id="c-label" class="text-base font-extrabold leading-tight">--</div>
+          <div id="c-sky" class="text-[10px] text-slate-400 font-medium">--</div>
           <div class="text-[10px] text-slate-500 font-mono mt-0.5">Z=<span id="c-z">-</span> &middot; <span id="c-trend">-</span></div>
         </div>
         <div>
@@ -245,16 +261,6 @@ DASHBOARD_HTML = r"""
       </div>
     </div>
 
-    <div class="glass rounded-2xl p-4 lg:col-span-4 shrink-0">
-      <div class="flex items-center justify-between mb-2">
-        <div>
-          <h2 class="text-sm font-bold">Seven day outlook</h2>
-          <p class="text-[10px] text-slate-500 font-mono">climatology plus decaying anomaly, not a synoptic forecast</p>
-        </div>
-        <span id="o-badge" class="px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono uppercase font-semibold">warming up</span>
-      </div>
-      <div id="o-strip" class="grid grid-cols-4 sm:grid-cols-7 gap-2"></div>
-    </div>
 
     <div class="glass rounded-2xl px-4 py-2.5 lg:col-span-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-x-4 gap-y-1.5 font-mono text-[10px]">
       <div><div class="text-slate-600 uppercase">wet bulb</div><div id="d-wb" class="text-slate-200 font-semibold">--</div></div>
@@ -394,6 +400,58 @@ DASHBOARD_HTML = r"""
     </div>
   </section>
 
+  <!-- ---------------- STATS FOR NERDS ---------------- -->
+  <!-- Everything the estimator and the 18 learners are actually carrying, read
+       straight off the live objects. No internal scrollers: the head bank is a
+       fixed 18 rows and the attribution list is capped at what fits. -->
+  <section id="pane-nerd" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr]">
+
+    <div class="glass rounded-2xl p-3 lg:col-span-3">
+      <div class="flex items-baseline justify-between mb-1.5">
+        <h2 class="text-sm font-bold">Kalman bank</h2>
+        <span class="text-[9px] font-mono text-slate-600 uppercase">NIS near 1 means honestly tuned</span>
+      </div>
+      <div id="n-filters" class="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-[10px]"></div>
+    </div>
+
+    <div class="glass rounded-2xl p-3">
+      <h2 class="text-sm font-bold mb-1.5">Compensators</h2>
+      <div id="n-comp" class="font-mono text-[10px] space-y-1"></div>
+    </div>
+
+    <div class="glass rounded-2xl p-3 lg:col-span-2 flex flex-col min-h-0">
+      <div class="flex items-baseline justify-between mb-1.5 shrink-0">
+        <h2 class="text-sm font-bold">Learner bank</h2>
+        <span class="text-[9px] font-mono text-slate-600 uppercase">18 independent RLS heads</span>
+      </div>
+      <div id="n-heads" class="flex-1 min-h-0"></div>
+    </div>
+
+    <div class="glass rounded-2xl p-3 flex flex-col min-h-0">
+      <div class="flex items-baseline justify-between mb-1.5 shrink-0">
+        <h2 class="text-sm font-bold">Feature attribution</h2>
+        <select id="n-head-sel" class="bg-slate-900/90 border border-slate-800 text-slate-300 text-[10px] font-mono rounded px-1.5 py-0.5"></select>
+      </div>
+      <p class="text-[9px] text-slate-600 font-mono mb-1 shrink-0">largest |&theta;| after standardisation, so these are comparable</p>
+      <div id="n-theta" class="flex-1 min-h-0 font-mono text-[10px] space-y-0.5"></div>
+    </div>
+
+    <div class="glass rounded-2xl p-3 flex flex-col min-h-0 gap-2">
+      <div>
+        <h2 class="text-sm font-bold mb-1">Detectors</h2>
+        <div id="n-mon" class="font-mono text-[10px] space-y-1"></div>
+      </div>
+      <div>
+        <h2 class="text-sm font-bold mb-1">Climatology</h2>
+        <div id="n-clim" class="font-mono text-[10px] space-y-0.5"></div>
+      </div>
+      <div>
+        <h2 class="text-sm font-bold mb-1">Precipitation</h2>
+        <div id="n-precip" class="font-mono text-[10px] space-y-0.5"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ---------------- METHODS ---------------- -->
   <section id="pane-methods" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-5">
     <div class="glass rounded-2xl p-4 lg:col-span-2 flex flex-col min-h-0">
@@ -414,6 +472,21 @@ DASHBOARD_HTML = r"""
 
 <script>
 const el = (id) => document.getElementById(id);
+let lastDerived = {};
+const esc = (t) => String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+  .replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// KaTeX renders after the pane is populated. If the CDN is unreachable the
+// raw TeX stays visible, which is ugly but still readable, rather than blank.
+function typeset(root) {
+  if (typeof katex === 'undefined') return;
+  (root||document).querySelectorAll('.tex[data-tex],.tex-inline[data-tex]').forEach(n => {
+    if (n.dataset.done) return;
+    const display = n.classList.contains('tex');
+    try { katex.render(n.dataset.tex, n, {displayMode:display, throwOnError:false,
+                                          output:'html', trust:false}); n.dataset.done='1'; }
+    catch (e) { n.textContent = n.dataset.tex; }
+  });
+}
 const fmt = (v,d=1) => (v===null||v===undefined||Number.isNaN(v)) ? '--' : Number(v).toFixed(d);
 const SEV = { info:'text-slate-400', warn:'text-amber-300', error:'text-rose-300' };
 const tsFmt = (t) => new Date(t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -482,6 +555,9 @@ function applyTelemetry(d) {
   setFlash('l-lux', d.color ? String(d.color.clear) : '--');
 
   const rt = d.rates||{}, dv = d.derived||{};
+  // Kept module-level so the precipitation panel can pick an icon from what
+  // the sensors actually see, not just from the barometric class.
+  lastDerived = Object.assign({}, dv, {temperature: d.temperature});
   el('l-temp-rate').innerText = (rt.temperature_c_per_h>=0?'+':'')+fmt(rt.temperature_c_per_h,2)+' \u00b0C/h';
   el('l-press-rate').innerText = (rt.pressure_hpa_per_h>=0?'+':'')+fmt(rt.pressure_hpa_per_h,2)+' hPa/h';
   el('l-temp-raw').innerText = fmt(d.temperature_raw,1)+' / '+fmt(d.cpu_temp,0)+'\u00b0';
@@ -515,6 +591,12 @@ function applyTelemetry(d) {
 function applyPrecip(p) {
   if (!p || p.rain_probability===undefined) return;
   el('c-label').innerText = p.label||'--';
+  // The barometer gives the class; the light sensor, sun angle and thermometer
+  // decide which glyph honestly represents it.
+  const wx = wxPick(p.condition, lastDerived.cloud_index, lastDerived.solar_elevation,
+                    lastDerived.temperature, p.rain_probability);
+  el('c-icon').innerHTML = wxSvg(wx[0], 56);
+  el('c-sky').innerText = wx[1];
   el('c-z').innerText = p.zambretti_z!==undefined ? p.zambretti_z : '-';
   el('c-trend').innerText = p.pressure_characteristic||'-';
   if (p.tendency!==undefined) el('c-tend').innerText = (p.tendency>=0?'+':'')+fmt(p.tendency,2)+' hPa/h';
@@ -878,6 +960,168 @@ el('m-hcalrst').addEventListener('click', async () => {
   el('m-hcalstat').innerHTML = 'Reset to prior offset = <span class="text-cyan-300">'+r.offset+'%</span>';
 });
 
+/* ---------------- STATS FOR NERDS ---------------- */
+let nerdDoc = null, nerdHead = null;
+const HL = (h) => h<3600 ? (h/60)+'m' : h<86400 ? (h/3600)+'h' : (h/86400)+'d';
+function bar(frac, colour) {
+  const w = Math.max(0, Math.min(1, frac||0))*100;
+  return '<div class="h-1 bg-slate-950 rounded-full overflow-hidden border border-slate-800/70">'+
+         '<div class="h-full" style="width:'+w+'%;background:'+colour+'"></div></div>';
+}
+async function loadNerd() {
+  const d = await fetch('/api/nerd').then(r=>r.json());
+  nerdDoc = d;
+
+  const COL = {temperature:'#f59e0b', humidity:'#06b6d4', pressure:'#a78bfa'};
+  el('n-filters').innerHTML = Object.keys(d.filters||{}).map(k=>{
+    const f = d.filters[k];
+    // NIS is chi-square(1) distributed when consistent, so 1 is the target and
+    // the bar is scaled to 3 as a "clearly wrong" ceiling.
+    return '<div class="bg-slate-900/50 rounded-lg border border-slate-800/70 p-2">'+
+      '<div class="flex justify-between mb-1"><span style="color:'+COL[k]+'">'+k+'</span>'+
+      '<span class="text-slate-500">'+(f.initialised?'':'warming')+'</span></div>'+
+      '<div class="flex justify-between text-slate-500">NIS<span class="text-slate-200 font-bold">'+fmt(f.nis,3)+'</span></div>'+
+      bar(f.nis/3, COL[k])+
+      '<div class="flex justify-between text-slate-500 mt-1">&sigma; level<span class="text-slate-300">'+fmt(f.sigma_level,4)+'</span></div>'+
+      '<div class="flex justify-between text-slate-500">P rate<span class="text-slate-300">'+f.p_rate.toExponential(2)+'</span></div>'+
+      '<div class="flex justify-between text-slate-600">q / r<span>'+f.q.toExponential(1)+' / '+fmt(f.r,3)+'</span></div>'+
+      '</div>';
+  }).join('');
+
+  const th = (d.compensators||{}).thermal||{}, hu = (d.compensators||{}).humidity||{};
+  el('n-comp').innerHTML =
+    '<div class="flex justify-between text-slate-500">k<span class="text-emerald-300 font-bold">'+fmt(th.k,4)+'</span></div>'+
+    '<div class="flex justify-between text-slate-600">P / n<span>'+fmt(th.P,3)+' / '+(th.n||0)+'</span></div>'+
+    '<div class="flex justify-between text-slate-600">clamp<span>'+fmt(th.k_min,2)+' .. '+fmt(th.k_max,2)+'</span></div>'+
+    '<div class="border-t border-slate-800 my-1"></div>'+
+    '<div class="flex justify-between text-slate-500">RH offset<span class="text-cyan-300 font-bold">'+fmt(hu.offset,2)+'%</span></div>'+
+    '<div class="flex justify-between text-slate-600">P / n<span>'+fmt(hu.P,3)+' / '+(hu.n||0)+'</span></div>'+
+    '<div class="flex justify-between text-slate-600">psychrometric<span>'+(hu.psychrometric?'on':'off')+'</span></div>';
+
+  const heads = d.heads||[];
+  el('n-heads').innerHTML = heads.length ? '<table class="w-full font-mono text-[10px]">'+
+    '<thead class="text-slate-600 uppercase text-[9px]"><tr class="border-b border-slate-800">'+
+    '<th class="text-left py-0.5">head</th><th class="text-right">n</th><th class="text-right">tr P</th>'+
+    '<th class="text-right">|&theta;|</th><th class="text-right">rmse</th><th class="text-right">&alpha;</th>'+
+    '<th class="text-right">cov</th><th class="text-right">&plusmn;</th><th class="text-right pl-2">p/c/l</th></tr></thead><tbody>'+
+    heads.map(h=>{
+      const sat = h.trace_p/h.p_max;
+      const cov = h.coverage===null||h.coverage===undefined ? '-' : Math.round(h.coverage*100)+'%';
+      const covCls = (h.coverage!==null && Math.abs(h.coverage-(1-h.alpha_target))<0.03) ? 'text-emerald-300' : 'text-amber-300';
+      const w = h.weights||{};
+      return '<tr class="border-b border-slate-800/40">'+
+        '<td class="py-0.5 text-slate-400">'+h.target.slice(0,4)+' <span class="text-slate-600">'+HL(h.horizon_s)+'</span></td>'+
+        '<td class="text-right text-slate-600">'+h.n_updates+'</td>'+
+        '<td class="text-right '+(sat>0.95?'text-rose-300':'text-slate-400')+'">'+h.trace_p.toExponential(1)+'</td>'+
+        '<td class="text-right text-slate-300">'+fmt(h.theta_norm,1)+'</td>'+
+        '<td class="text-right text-slate-300">'+fmt(h.rmse_ewma,3)+'</td>'+
+        '<td class="text-right text-indigo-300">'+fmt(h.alpha,3)+'</td>'+
+        '<td class="text-right '+covCls+'">'+cov+'</td>'+
+        '<td class="text-right text-slate-500">'+(h.halfwidth===null?'-':fmt(h.halfwidth,2))+'</td>'+
+        '<td class="text-right text-slate-600 pl-2">'+Math.round((w.persistence||0)*100)+'/'+
+        Math.round((w.climatology||0)*100)+'/'+Math.round((w.learned||0)*100)+'</td></tr>';
+    }).join('')+'</tbody></table>'
+    : '<p class="text-[10px] text-slate-600 font-mono">No heads trained yet.</p>';
+
+  const sel = el('n-head-sel');
+  if (sel.options.length !== heads.length) {
+    sel.innerHTML = heads.map((h,i)=>'<option value="'+i+'">'+h.target.slice(0,4)+' '+HL(h.horizon_s)+'</option>').join('');
+  }
+  if (nerdHead===null || nerdHead>=heads.length) nerdHead = 0;
+  sel.value = String(nerdHead);
+  drawTheta();
+
+  const mo = d.monitoring||{}, nv = mo.novelty||{}, dr = mo.drift||{};
+  el('n-mon').innerHTML =
+    '<div class="flex justify-between text-slate-500">Mahalanobis d&sup2;<span class="text-slate-200 font-bold">'+fmt(nv.d2,2)+'</span></div>'+
+    bar((nv.d2||0)/(nv.threshold||12), '#f59e0b')+
+    '<div class="flex justify-between text-slate-600">threshold / dims<span>'+fmt(nv.threshold,0)+' / '+(nv.dims||0)+'</span></div>'+
+    '<div class="flex justify-between text-slate-500 mt-1">Page-Hinkley m&#8314;<span class="text-slate-200 font-bold">'+fmt(dr.m_pos,3)+'</span></div>'+
+    '<div class="flex justify-between text-slate-600">m&#8315; / alarms<span>'+fmt(dr.m_neg,3)+' / '+(dr.alarms||0)+'</span></div>';
+
+  const cl = d.climatology||{};
+  el('n-clim').innerHTML =
+    '<div class="flex justify-between text-slate-500">history<span class="text-slate-300">'+fmt(cl.history_days,2)+' d</span></div>'+
+    '<div class="flex justify-between text-slate-500">harmonics<span class="text-slate-300">'+(cl.diurnal_harmonics||0)+' diurnal, '+
+      (cl.annual_terms?(cl.annual_harmonics||0):0)+' annual</span></div>'+
+    Object.keys(cl.residual_std||{}).map(k=>
+      '<div class="flex justify-between text-slate-600">&sigma; '+k.slice(0,4)+'<span>'+fmt(cl.residual_std[k],3)+'</span></div>').join('');
+
+  const pr = d.precipitation||{};
+  const co = (pr.coefficients||[]).slice().sort((a,b)=>Math.abs(b.weight)-Math.abs(a.weight)).slice(0,4);
+  el('n-precip').innerHTML =
+    '<div class="flex justify-between text-slate-500">labels<span class="text-slate-300">'+(pr.strong_labels||0)+' strong, '+(pr.weak_labels||0)+' weak</span></div>'+
+    '<div class="flex justify-between text-slate-500">logloss<span class="text-slate-300">'+fmt(pr.logloss_ewma,4)+'</span></div>'+
+    co.map(c=>'<div class="flex justify-between text-slate-600">'+String(c.feature||'?').slice(0,16)+'<span class="'+(c.weight>=0?'text-emerald-400':'text-rose-400')+'">'+
+      (c.weight>=0?'+':'')+fmt(c.weight,3)+'</span></div>').join('');
+}
+function drawTheta() {
+  if (!nerdDoc || !nerdDoc.heads || !nerdDoc.heads.length) return;
+  const h = nerdDoc.heads[nerdHead], names = nerdDoc.feature_names||[];
+  const pairs = (h.theta||[]).map((v,i)=>({n:names[i]||('f'+i), v:v}))
+    .sort((a,b)=>Math.abs(b.v)-Math.abs(a.v)).slice(0,11);
+  const mx = Math.max.apply(null, pairs.map(p=>Math.abs(p.v)).concat([1e-9]));
+  el('n-theta').innerHTML = pairs.map(p=>
+    '<div class="flex items-center gap-1.5">'+
+    '<span class="text-slate-500 truncate" style="width:46%">'+p.n+'</span>'+
+    '<span class="flex-1">'+bar(Math.abs(p.v)/mx, p.v>=0?'#34d399':'#fb7185')+'</span>'+
+    '<span class="'+(p.v>=0?'text-emerald-400':'text-rose-400')+'" style="width:22%;text-align:right">'+
+    (p.v>=0?'+':'')+fmt(p.v,3)+'</span></div>').join('');
+}
+loaders.nerd = loadNerd;
+
+/* ---------------- WEATHER ICONS ----------------
+   Inline SVG, no icon font and no extra request. The glyph is not chosen from
+   the Zambretti class alone: the station also measures cloud index from the
+   light sensor and knows the solar elevation, so a "fine" barometer under a
+   thick overcast still draws a cloud, and after sunset it draws a moon rather
+   than a sun. Snow is picked on temperature, not on the barometer. */
+const WX = {
+  sun: '<circle cx="32" cy="32" r="13" fill="#fbbf24"/>'+
+       '<g stroke="#fbbf24" stroke-width="4" stroke-linecap="round">'+
+       '<path d="M32 6v8M32 50v8M6 32h8M50 32h8M13 13l6 6M45 45l6 6M51 13l-6 6M19 45l-6 6"/></g>',
+  moon: '<path d="M40 10a22 22 0 1 0 14 40A24 24 0 0 1 40 10z" fill="#e2e8f0"/>'+
+        '<circle cx="20" cy="16" r="1.8" fill="#94a3b8"/><circle cx="14" cy="26" r="1.2" fill="#94a3b8"/>',
+  cloud: '<path d="M20 46a11 11 0 0 1 1-22 15 15 0 0 1 28 4 9 9 0 0 1-2 18z" fill="#94a3b8"/>',
+  partsun: '<circle cx="22" cy="22" r="9" fill="#fbbf24"/>'+
+       '<g stroke="#fbbf24" stroke-width="3" stroke-linecap="round">'+
+       '<path d="M22 4v6M4 22h6M9 9l4 4M35 9l-4 4"/></g>'+
+       '<path d="M26 50a10 10 0 0 1 1-20 13 13 0 0 1 25 4 8 8 0 0 1-2 16z" fill="#cbd5e1"/>',
+  partmoon: '<path d="M30 8a15 15 0 1 0 10 27A16 16 0 0 1 30 8z" fill="#e2e8f0"/>'+
+       '<path d="M26 52a10 10 0 0 1 1-20 13 13 0 0 1 25 4 8 8 0 0 1-2 16z" fill="#cbd5e1"/>',
+  rain: '<path d="M20 40a11 11 0 0 1 1-22 15 15 0 0 1 28 4 9 9 0 0 1-2 18z" fill="#94a3b8"/>'+
+        '<g stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round">'+
+        '<path d="M22 46l-3 9M33 46l-3 9M44 46l-3 9"/></g>',
+  showers: '<path d="M20 40a11 11 0 0 1 1-22 15 15 0 0 1 28 4 9 9 0 0 1-2 18z" fill="#a3adbb"/>'+
+        '<g stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round">'+
+        '<path d="M26 46l-2 7M39 46l-2 7"/></g>',
+  storm: '<path d="M20 38a11 11 0 0 1 1-22 15 15 0 0 1 28 4 9 9 0 0 1-2 18z" fill="#64748b"/>'+
+        '<path d="M34 36l-10 15h7l-3 12 12-17h-7l4-10z" fill="#fbbf24"/>',
+  snow: '<path d="M20 40a11 11 0 0 1 1-22 15 15 0 0 1 28 4 9 9 0 0 1-2 18z" fill="#cbd5e1"/>'+
+        '<g stroke="#e0f2fe" stroke-width="3" stroke-linecap="round">'+
+        '<path d="M22 48v8M18 52h8M33 48v8M29 52h8M44 48v8M40 52h8"/></g>',
+};
+function wxPick(condition, cloud, elevation, tempC, rainProb) {
+  const night = (elevation !== undefined && elevation !== null && elevation < -1);
+  const c = (cloud === undefined || cloud === null) ? 0.5 : cloud;
+  if (condition === 'stormy') return ['storm', 'Thunderstorms'];
+  // Snow is a temperature question, not a barometric one.
+  if (tempC !== undefined && tempC !== null && tempC <= 1.5 && rainProb > 0.35)
+    return ['snow', 'Snow possible'];
+  if (condition === 'wet')       return ['rain', 'Wet and windy'];
+  if (condition === 'rain')      return ['rain', 'Rain likely'];
+  if (condition === 'unsettled') return ['showers', 'Showers around'];
+  if (condition === 'changeable')
+    return c > 0.7 ? ['cloud','Cloudy'] : [night?'partmoon':'partsun', 'Partly cloudy'];
+  // settled / fine / fair: defer to what the light sensor actually sees.
+  if (c < 0.25) return [night?'moon':'sun', night ? 'Clear skies' : 'Sunny, open skies'];
+  if (c < 0.65) return [night?'partmoon':'partsun', 'Partly cloudy'];
+  return ['cloud', 'Cloudy'];
+}
+function wxSvg(name, size) {
+  return '<svg viewBox="0 0 64 64" width="'+size+'" height="'+size+'" aria-hidden="true">'+(WX[name]||WX.cloud)+'</svg>';
+}
+
 /* ---------------- METHODS ---------------- */
 let methodsDoc = null, methodSel = 'acquire';
 const STAGE_COLOUR = { acquire:'#94a3b8', compensate:'#34d399', kalman:'#f59e0b', features:'#06b6d4',
@@ -930,7 +1174,13 @@ function drawStage() {
     '<div class="text-slate-600 uppercase text-[9px]">produces</div><div class="text-slate-300 mt-0.5">'+s.produces+'</div></div></div>'+
     (s.math ? '<div class="bg-slate-950/60 rounded-lg border border-slate-800/70 px-3 py-2.5 overflow-x-auto">'+
       '<div class="text-[9px] text-slate-600 font-mono uppercase mb-1">core relation</div>'+
-      '<div class="text-[11px] font-mono text-indigo-300">'+s.math.replace(/[{}\\]/g,' ').replace(/\s+/g,' ')+'</div></div>' : '')+
+      (Array.isArray(s.math)?s.math:[s.math]).map(m=>'<div class="tex" data-tex="'+esc(m)+'"></div>').join('')+'</div>' : '')+
+    (s.symbols ? '<div><div class="text-[9px] text-slate-600 font-mono uppercase mb-1">symbols</div>'+
+      '<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1">'+
+      Object.keys(s.symbols).map(k=>'<div class="flex gap-2 items-baseline">'+
+        '<span class="tex-inline shrink-0" data-tex="'+esc(k)+'"></span>'+
+        '<span class="text-[11px] text-slate-500 leading-snug">'+s.symbols[k]+'</span></div>').join('')+
+      '</div></div>' : '')+
     '<div><div class="text-[9px] text-slate-600 font-mono uppercase mb-1">why it is done this way</div>'+
     '<p class="text-[12px] text-slate-300 leading-relaxed">'+s.why+'</p></div>'+
     '<div class="border-l-2 pl-3" style="border-color:'+c+'66">'+
@@ -951,6 +1201,7 @@ function drawStage() {
       '<div class="text-[9px] text-slate-600 font-mono uppercase mb-1.5">glossary</div>'+
       methodsDoc.glossary.map(g=>'<div class="mb-2"><span class="text-[11px] font-semibold text-slate-300">'+g.term+'</span>'+
         '<p class="text-[11px] text-slate-500 leading-relaxed">'+g.definition+'</p></div>').join('')+'</div>' : '');
+  typeset(el('me-body'));
 }
 loaders.methods = loadMethods;
 
@@ -960,7 +1211,9 @@ loadForecast();
 loadOutlook();
 fetch('/api/status').then(r=>r.json()).then(s => { el('hd-days').innerText = fmt(s.history_days,2); });
 setInterval(() => { if (activeTab==='live') { loadForecast(); loadOutlook(); } }, 60000);
+el('n-head-sel').addEventListener('change', e => { nerdHead = Number(e.target.value); drawTheta(); });
 setInterval(() => { if (activeTab==='models') loadModels(); }, 60000);
+setInterval(() => { if (activeTab==='nerd') loadNerd(); }, 30000);
 setInterval(() => { if (activeTab==='history') loadHistory(); }, 300000);
 </script>
 </body>

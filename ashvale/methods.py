@@ -73,9 +73,22 @@ def pipeline(cfg) -> List[Dict[str, Any]]:
             "failure": "A mistyped reference drives k to its clamp and stays there "
                        "across restarts, because state persists. The reset button "
                        "on the Models tab exists for exactly that.",
-            "math": r"k_{t} = k_{t-1} + \frac{P\varphi}{\lambda + \varphi P \varphi}"
-                    r"\left[(T_{raw} - T_{ref}) - k_{t-1}\varphi\right],"
-                    r"\quad \varphi = T_{cpu} - T_{raw}",
+            "math": [
+                r"T = T_{raw} - k\,(T_{cpu} - T_{raw}), \qquad k \ge 0",
+                r"\varphi = \max(T_{cpu} - T_{raw},\,0), \qquad "
+                r"y = T_{raw} - T_{ref}",
+                r"g = \frac{P\varphi}{\lambda + \varphi^{2} P}, \qquad "
+                r"k_t = \operatorname{clip}\!\big(k_{t-1} + g\,(y - k_{t-1}\varphi),\;"
+                r"k_{\min},\,k_{\max}\big)",
+                r"P_t = \frac{P_{t-1} - g\,\varphi\,P_{t-1}}{\lambda}",
+            ],
+            "symbols": {
+                r"k": "self-heating coefficient, the one estimated parameter",
+                r"\varphi": "regressor: the CPU-to-sensor gradient, floored at zero",
+                r"P": "scalar parameter variance; large means uncertain, so large steps",
+                r"\lambda": "forgetting factor, 0.98. Old calibrations decay",
+                r"g": "RLS gain. Note it is the Kalman gain for a one-dimensional state",
+            },
             "params": {"current k": f"{s.cpu_heat_k:g} (prior)",
                        "clamp": f"{s.cpu_heat_k_min:g} to {s.cpu_heat_k_max:g}"},
         },
@@ -96,9 +109,26 @@ def pipeline(cfg) -> List[Dict[str, Any]]:
             "failure": "Process noise too low and the filter lags real weather; too "
                        "high and you have an expensive passthrough. The innovation "
                        "statistic is logged so you can tell which.",
-            "math": r"x = \begin{bmatrix} \text{level} \\ \text{rate} \end{bmatrix},"
-                    r"\quad Q = q\begin{bmatrix} \Delta t^3/3 & \Delta t^2/2 \\"
-                    r"\Delta t^2/2 & \Delta t \end{bmatrix}",
+            "math": [
+                r"x = \begin{bmatrix} \text{level} \\ \text{rate} \end{bmatrix}, \qquad "
+                r"F = \begin{bmatrix} 1 & \Delta t \\ 0 & 1 \end{bmatrix}, \qquad "
+                r"H = \begin{bmatrix} 1 & 0 \end{bmatrix}",
+                r"Q = q\begin{bmatrix} \Delta t^{3}/3 & \Delta t^{2}/2 \\"
+                r"\Delta t^{2}/2 & \Delta t \end{bmatrix}"
+                r"\qquad\text{(continuous white-noise acceleration)}",
+                r"x^{-}_t = Fx_{t-1}, \qquad P^{-}_t = FP_{t-1}F^{\top} + Q",
+                r"y = z - Hx^{-}_t, \qquad S = HP^{-}_tH^{\top} + r, \qquad "
+                r"K = P^{-}_tH^{\top}S^{-1}",
+                r"P_t = (I - KH)P^{-}_t(I - KH)^{\top} + KrK^{\top}"
+                r"\qquad\text{(Joseph form, stays positive semi-definite)}",
+                r"\text{NIS} = y^{\top}S^{-1}y \;\approx\; 1 \text{ when the filter is tuned}",
+            ],
+            "symbols": {
+                r"q": "process noise density. The only knob that really matters",
+                r"r": "measurement noise variance, from the sensor datasheet",
+                r"S": "innovation covariance: how surprised the filter expects to be",
+                r"\text{NIS}": "normalised innovation squared. Above 1 means overconfident and lagging",
+            },
             "params": {"q temperature": f"{s.kalman_q_temp:g}",
                        "r temperature": f"{s.kalman_r_temp:g}",
                        "q pressure": f"{s.kalman_q_press:g}"},
@@ -147,9 +177,28 @@ def pipeline(cfg) -> List[Dict[str, Any]]:
                        "through quiet nights when the regressor barely moves, and "
                        "the model then detonates at sunrise. The trace is capped. "
                        "This is the most common way a field RLS deployment dies.",
-            "math": r"P_t = \frac{1}{\lambda}\left(P_{t-1} - "
-                    r"\frac{P_{t-1}x x^{\top}P_{t-1}}{\lambda + x^{\top}P_{t-1}x}"
-                    r"\right)",
+            "math": [
+                r"\hat{\theta} = \arg\min_{\theta}\; \sum_{i=1}^{t}"
+                r"\lambda^{\,t-i}\big(y_i - \theta^{\top}x_i\big)^{2}"
+                r"\qquad\text{(exponentially weighted least squares)}",
+                r"g_t = \frac{P_{t-1}x_t}{\lambda + x_t^{\top}P_{t-1}x_t}, \qquad "
+                r"\theta_t = \theta_{t-1} + g_t\big(y_t - \theta_{t-1}^{\top}x_t\big)",
+                r"P_t = \frac{1}{\lambda}\Big(P_{t-1} - g_t x_t^{\top} P_{t-1}\Big), "
+                r"\qquad P_t \leftarrow \tfrac{1}{2}\big(P_t + P_t^{\top}\big)",
+                r"\operatorname{tr}(P_t) > P_{\max} \;\Longrightarrow\; "
+                r"P_t \leftarrow P_t\,\frac{P_{\max}}{\operatorname{tr}(P_t)}"
+                r"\qquad\text{(the guard that stops covariance blow-up)}",
+                r"N_{\text{eff}} = \frac{1}{1-\lambda}"
+                r"\qquad\text{effective memory in samples}",
+                r"\hat{y}_{t+h} = y_t + \theta_h^{\top}x_t"
+                r"\qquad\text{each head predicts a delta, not a level}",
+            ],
+            "symbols": {
+                r"\theta": "33 weights, one bank per (target, horizon): 18 banks",
+                r"P": "parameter covariance. Its trace is the total uncertainty",
+                r"\lambda": "forgetting factor 0.9985, about 55 hours of memory",
+                r"P_{\max}": "trace cap. Without it, quiet nights inflate P until sunrise detonates the model",
+            },
             "params": {"forgetting": f"{m.rls_forgetting:g}",
                        "effective memory": _memory(m.rls_forgetting, m.grid_s),
                        "members": ", ".join(MEMBERS)},
@@ -171,8 +220,21 @@ def pipeline(cfg) -> List[Dict[str, Any]]:
                    "does underneath.",
             "failure": "If coverage sits far from target, the feedback rate is "
                        "wrong, not the model. Both are shown on the Models tab.",
-            "math": r"\alpha_{t+1} = \alpha_t + \gamma\left(\alpha^{*} - "
-                    r"\mathbb{1}[y_t \notin C_t]\right)",
+            "math": [
+                r"C_t = \big[\hat{y}_t - q_{1-\alpha_t},\; \hat{y}_t + q_{1-\alpha_t}\big], "
+                r"\qquad q_{1-\alpha} = \operatorname{Quantile}_{1-\alpha}\big(|e_i|\big)",
+                r"\alpha_{t+1} = \operatorname{clip}\Big(\alpha_t + \gamma\big(\alpha^{*} - "
+                r"\mathbb{1}\left[y_t \notin C_t\right]\big),\; 0.005,\; 0.75\Big)",
+                r"\frac{1}{T}\sum_{t=1}^{T}\mathbb{1}\left[y_t \in C_t\right] "
+                r"\;\xrightarrow[T\to\infty]{}\; 1-\alpha^{*}"
+                r"\qquad\text{without assuming exchangeability}",
+            ],
+            "symbols": {
+                r"\alpha^{*}": "target miss rate, 0.10 for a 90% band",
+                r"\alpha_t": "working miss rate. It moves; the target does not",
+                r"\gamma": "adaptation rate. Larger reacts faster and wanders more",
+                r"\mathbb{1}[\cdot]": "1 when the truth fell outside the band, else 0",
+            },
             "params": {"target coverage": f"{int((1 - m.conformal_alpha) * 100)}%",
                        "gamma": f"{m.conformal_gamma:g}",
                        "window": f"{m.conformal_window} residuals"},
@@ -196,9 +258,23 @@ def pipeline(cfg) -> List[Dict[str, Any]]:
                        "a 365-day sine to three weeks of data produces a "
                        "magnificent extrapolation straight off the edge of the "
                        "physical world.",
-            "math": r"y \sim \beta_0 + \beta_1 t + \sum_{k=1}^{3}"
-                    r"\left[a_k\sin\tfrac{2\pi k t}{\text{day}} + "
-                    r"b_k\cos\tfrac{2\pi k t}{\text{day}}\right] + \text{annual}",
+            "math": [
+                r"y(t) \approx \beta_0 + \beta_1 t + \sum_{k=1}^{K_d}"
+                r"\left[a_k\sin\frac{2\pi k t}{\tau_d} + b_k\cos\frac{2\pi k t}{\tau_d}\right]"
+                r" + \sum_{j=1}^{K_a}\left[c_j\sin\frac{2\pi j t}{\tau_a} + "
+                r"d_j\cos\frac{2\pi j t}{\tau_a}\right]",
+                r"\hat{\beta} = \big(X^{\top}X + \rho I\big)^{-1}X^{\top}y"
+                r"\qquad\text{(ridge, because harmonics get collinear on short records)}",
+                r"\hat{y}(t+h) = \underbrace{\mu(t+h)}_{\text{harmonic fit}} + "
+                r"\underbrace{\big(y(t)-\mu(t)\big)}_{\text{today's anomaly}}\cdot"
+                r"\,2^{-h/h_{1/2}}",
+            ],
+            "symbols": {
+                r"\tau_d,\ \tau_a": "one day and one tropical year",
+                r"K_a": "annual harmonics, held at zero below 120 days of history",
+                r"\rho": "ridge penalty",
+                r"h_{1/2}": "anomaly half-life. Today's departure decays toward climatology",
+            },
             "params": {"diurnal harmonics": "3", "annual harmonics": "2",
                        "anomaly half-life": "30 h"},
         },

@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from .config import CONFIG
 from .dashboard import DASHBOARD_HTML
+from .features import FEATURE_NAMES
 from .led import LedDisplay
 from .methods import describe
 from .station import Station
@@ -348,6 +349,107 @@ def models() -> Dict:
             "logloss_ewma": st.precip.ewma_logloss,
         },
         "calibration": st.tracker.compensator.to_dict(),
+    })
+
+
+@app.get("/api/nerd")
+def nerd() -> Dict:
+    """Every internal number the estimator and the learners are carrying.
+
+    Deliberately read-only and computed from live objects rather than stored, so
+    it cannot drift from what the station is actually using. Everything here is
+    cheap: no matrix inversions, no queries beyond what the caller already pays
+    for. `theta` is returned per head so the UI can show which of the 33 features
+    each horizon actually leans on, which is the single most revealing view of
+    what the model has learned.
+    """
+    st = _st()
+    tr = st.tracker
+
+    filters = {}
+    for name, kf in tr.filters.items():
+        P = np.asarray(kf.P, dtype=float)
+        filters[name] = {
+            "level": float(kf.x[0]), "rate_per_h": float(kf.x[1]) * 3600.0,
+            "nis": float(kf.nis),
+            "p_level": float(P[0, 0]), "p_rate": float(P[1, 1]),
+            "p_cross": float(P[0, 1]),
+            "sigma_level": float(np.sqrt(max(P[0, 0], 0.0))),
+            "q": float(kf.q), "r": float(kf.r),
+            "initialised": bool(kf.initialised),
+        }
+
+    heads = []
+    for (target, h), head in sorted(st.nowcast.heads.items()):
+        m = head.model
+        P = np.asarray(m.P, dtype=float)
+        theta = np.asarray(m.theta, dtype=float)
+        heads.append({
+            "target": target, "horizon_s": h,
+            "n_updates": int(m.n_updates),
+            "trace_p": float(np.trace(P)),
+            "theta_norm": float(np.linalg.norm(theta)),
+            "rmse_ewma": float(np.sqrt(max(m.ewma_sq_error, 0.0))),
+            "lam": float(m.lam), "p_max": float(m.p_max),
+            "eff_memory": float(1.0 / max(1.0 - m.lam, 1e-9)),
+            "alpha": float(head.conformal.alpha),
+            "alpha_target": float(head.conformal.alpha_target),
+            "coverage": (float(head.conformal.empirical_coverage)
+                         if np.isfinite(head.conformal.empirical_coverage) else None),
+            "halfwidth": (float(head.conformal.quantile())
+                          if np.isfinite(head.conformal.quantile()) else None),
+            "weights": {k: float(v) for k, v in
+                        zip(("persistence", "climatology", "learned"), head.weights)},
+            "theta": [round(float(v), 6) for v in theta],
+        })
+
+    mono = st.monitor
+    nov = getattr(mono, "novelty", None)
+    ph = getattr(mono, "drift", None)
+    monitoring = {
+        "novelty": {
+            "d2": float(getattr(nov, "last_d2", 0.0)) if nov is not None else None,
+            "threshold": float(getattr(nov, "threshold", 0.0)) if nov is not None else None,
+            "n": int(getattr(nov, "n", 0)) if nov is not None else None,
+            "dims": int(getattr(nov, "d", 0)) if nov is not None else None,
+            "z": [round(float(v), 4) for v in np.asarray(getattr(nov, "z", []), dtype=float)]
+            if nov is not None else [],
+        },
+        "drift": {
+            "m_pos": float(getattr(ph, "m_pos", 0.0)) if ph is not None else None,
+            "m_neg": float(getattr(ph, "m_neg", 0.0)) if ph is not None else None,
+            "mean": float(getattr(ph, "mean", 0.0)) if ph is not None else None,
+            "n": int(getattr(ph, "n", 0)) if ph is not None else None,
+            "alarms": int(getattr(ph, "n_alarms", 0)) if ph is not None else None,
+            "delta": float(getattr(ph, "delta", 0.0)) if ph is not None else None,
+        },
+    }
+
+    return _clean({
+        "feature_names": list(FEATURE_NAMES),
+        "filters": filters,
+        "compensators": {
+            "thermal": tr.compensator.to_dict(),
+            "humidity": tr.hum_compensator.to_dict(),
+        },
+        "heads": heads,
+        "climatology": {
+            "ready": st.climatology.ready,
+            "annual_terms": st.climatology.use_annual,
+            "history_days": round(st.climatology.n_days, 3),
+            "diurnal_harmonics": st.climatology.kd,
+            "annual_harmonics": st.climatology.ka,
+            "ridge": st.climatology.ridge,
+            "residual_std": st.climatology.resid_std,
+            "n_coefficients": {k: len(v) for k, v in st.climatology.coef.items()},
+        },
+        "precipitation": {
+            "coefficients": st.precip.coefficients(),
+            "strong_labels": st.precip.n_strong,
+            "weak_labels": st.precip.n_weak,
+            "logloss_ewma": st.precip.ewma_logloss,
+        },
+        "monitoring": monitoring,
     })
 
 

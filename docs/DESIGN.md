@@ -323,7 +323,7 @@ consecutive readings are the only tell.
 
 | Symptom | Knob | Direction |
 |---|---|---|
-| Temperature reads consistently high | Calibrate from the Models and calibration tab, or `sensor.cpu_heat_k` | Raise |
+| Temperature reads consistently high | Calibrate from the Models and Calibration tab, or `sensor.cpu_heat_k` | Raise |
 | Humidity reads consistently off | Calibrate against a reference hygrometer, or `sensor.hum_offset` | Either |
 | Readings over-smoothed, lag real change | `sensor.kalman_q_temp` | Raise |
 | Rates look noisy | `sensor.kalman_q_*` down, or `kalman_r_*` up | |

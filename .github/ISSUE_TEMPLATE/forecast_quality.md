@@ -11,7 +11,7 @@ labels: forecasting
 ```
 ```
 
-**Scorecard from the Models and calibration tab** (or `GET /api/scorecard`)
+**Scorecard from the Models and Calibration tab** (or `GET /api/scorecard`)
 
 ```json
 ```
