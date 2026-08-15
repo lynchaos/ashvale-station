@@ -37,9 +37,13 @@ def main() -> None:
 
     # One worker, one event loop. The station owns mutable model state, so a
     # second worker would give you two divergent forecasters sharing a socket.
+    # timeout_graceful_shutdown bounds the wait for in-flight requests. Without
+    # it, the dashboard's server-sent-events connection never completes, so a
+    # stop blocks until systemd's 90 s timeout and ends in SIGKILL. Measured:
+    # with one stream client open, shutdown went from "never" to under 2 s.
     uvicorn.run("ashvale.api:app", host=args.host, port=args.port,
                 reload=args.reload, workers=1, log_level="info",
-                limit_concurrency=32)
+                limit_concurrency=32, timeout_graceful_shutdown=5)
 
 
 if __name__ == "__main__":

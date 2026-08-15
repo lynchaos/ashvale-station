@@ -475,8 +475,10 @@ const el = (id) => document.getElementById(id);
 let lastDerived = {};
 const esc = (t) => String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
   .replace(/</g,'&lt;').replace(/>/g,'&gt;');
-// KaTeX renders after the pane is populated. If the CDN is unreachable the
-// raw TeX stays visible, which is ugly but still readable, rather than blank.
+// KaTeX renders after the pane is populated, replacing the element's contents.
+// The raw TeX is written into the element first so an unreachable CDN degrades
+// to ugly-but-readable source rather than six blank boxes. Verified by aborting
+// the katex request in a browser test.
 function typeset(root) {
   if (typeof katex === 'undefined') return;
   (root||document).querySelectorAll('.tex[data-tex],.tex-inline[data-tex]').forEach(n => {
@@ -1174,11 +1176,11 @@ function drawStage() {
     '<div class="text-slate-600 uppercase text-[9px]">produces</div><div class="text-slate-300 mt-0.5">'+s.produces+'</div></div></div>'+
     (s.math ? '<div class="bg-slate-950/60 rounded-lg border border-slate-800/70 px-3 py-2.5 overflow-x-auto">'+
       '<div class="text-[9px] text-slate-600 font-mono uppercase mb-1">core relation</div>'+
-      (Array.isArray(s.math)?s.math:[s.math]).map(m=>'<div class="tex" data-tex="'+esc(m)+'"></div>').join('')+'</div>' : '')+
+      (Array.isArray(s.math)?s.math:[s.math]).map(m=>'<div class="tex" data-tex="'+esc(m)+'">'+esc(m)+'</div>').join('')+'</div>' : '')+
     (s.symbols ? '<div><div class="text-[9px] text-slate-600 font-mono uppercase mb-1">symbols</div>'+
       '<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1">'+
       Object.keys(s.symbols).map(k=>'<div class="flex gap-2 items-baseline">'+
-        '<span class="tex-inline shrink-0" data-tex="'+esc(k)+'"></span>'+
+        '<span class="tex-inline shrink-0" data-tex="'+esc(k)+'">'+esc(k)+'</span>'+
         '<span class="text-[11px] text-slate-500 leading-snug">'+s.symbols[k]+'</span></div>').join('')+
       '</div></div>' : '')+
     '<div><div class="text-[9px] text-slate-600 font-mono uppercase mb-1">why it is done this way</div>'+
@@ -1204,6 +1206,8 @@ function drawStage() {
   typeset(el('me-body'));
 }
 loaders.methods = loadMethods;
+// A slow CDN can land katex after the pane has already rendered.
+window.addEventListener('load', () => typeset());
 
 /* ---------------- BOOT ---------------- */
 connectStream();

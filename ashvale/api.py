@@ -28,7 +28,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -43,6 +43,14 @@ station: Optional[Station] = None
 display: Optional[LedDisplay] = None
 
 
+# Set when the app is shutting down. The SSE generator watches it: without
+# that, an open dashboard is an in-flight request that never completes, so
+# uvicorn's graceful shutdown blocks until systemd's timeout SIGKILLs the
+# process. Reproduced: with no stream client the service stops in 2 s, with
+# one open client it was still running after 15 s.
+_shutdown = asyncio.Event()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global station, display
@@ -55,6 +63,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        _shutdown.set()
         if display is not None:
             await display.stop()
         if station is not None:
@@ -522,11 +531,18 @@ def events(limit: int = Query(50, ge=1, le=500)) -> List[Dict]:
 
 
 @app.get("/api/stream")
-async def stream():
+async def stream(request: Request):
     """Server-sent events. One connection instead of a poll every 2 seconds,
-    which on a Zero 2 W is the difference between 4% and 0.4% CPU."""
+    which on a Zero 2 W is the difference between 4% and 0.4% CPU.
+
+    The loop exits on shutdown or client disconnect. Both matter: an endless
+    generator keeps the response in flight, and uvicorn will not finish a
+    graceful shutdown while one is open.
+    """
     async def gen():
-        while True:
+        while not _shutdown.is_set():
+            if await request.is_disconnected():
+                break
             st = _st()
             payload = {
                 "telemetry": telemetry(),
@@ -535,7 +551,12 @@ async def stream():
                 "drift_stress": round(st.monitor.drift.stress, 3),
             }
             yield f"data: {json.dumps(payload)}\n\n"
-            await asyncio.sleep(2.0)
+            # Wait on the shutdown event rather than sleeping blindly, so a stop
+            # is honoured immediately instead of up to 2 s later.
+            try:
+                await asyncio.wait_for(_shutdown.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
