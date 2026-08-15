@@ -1,0 +1,423 @@
+# Copyright 2026 Kemal Yaylali
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""HTTP surface. Thin by design: every endpoint is a view over station state.
+
+Backwards compatibility matters here, so `/api/telemetry` returns a
+superset of the original payload. Anything already pointed at this Pi
+keeps working, and the new fields are simply there when you want them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, StreamingResponse
+from pydantic import BaseModel, Field
+
+from .config import CONFIG
+from .dashboard import DASHBOARD_HTML
+from .led import LedDisplay
+from .methods import describe
+from .station import Station
+
+station: Optional[Station] = None
+display: Optional[LedDisplay] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global station, display
+    station = Station(CONFIG)
+    station.sample_once()
+    station.start()
+    if CONFIG.server.led_enabled:
+        display = LedDisplay(station, CONFIG.server.led_cycle_s)
+        display.start()
+    try:
+        yield
+    finally:
+        if display is not None:
+            await display.stop()
+        if station is not None:
+            await station.stop()
+
+
+app = FastAPI(
+    title="Ashvale Station",
+    version="1.0.0",
+    description="Sense HAT v2 telemetry with online forecasting, calibrated "
+                "uncertainty, drift detection and verification.",
+    lifespan=lifespan,
+)
+
+
+def _st() -> Station:
+    if station is None:
+        raise HTTPException(503, "station not started")
+    return station
+
+
+def _clean(obj: Any) -> Any:
+    """JSON is not a superset of IEEE 754. NaN in a response body will
+    silently break a browser's JSON.parse, which is a miserable bug to
+    chase from a dashboard that just shows dashes."""
+    if isinstance(obj, dict):
+        return {k: _clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean(v) for v in obj]
+    if isinstance(obj, (np.floating, float)):
+        f = float(obj)
+        return None if (f != f or f in (float("inf"), float("-inf"))) else round(f, 6)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, np.ndarray):
+        return _clean(obj.tolist())
+    return obj
+
+
+# --------------------------------------------------------------- models
+
+class LabelIn(BaseModel):
+    kind: str = Field("rain", description="rain | fog | frost | window_open")
+    value: float = Field(..., ge=0.0, le=1.0)
+    ts: Optional[float] = None
+    note: str = ""
+
+
+class CalibrationIn(BaseModel):
+    reference_c: Optional[float] = Field(None, description="Trusted air temperature in C")
+    reset: bool = Field(False, description="Discard the learned coefficient and its "
+                                           "covariance, returning to the configured prior")
+
+
+# ------------------------------------------------------------ endpoints
+
+@app.get("/api/telemetry")
+def telemetry() -> Dict:
+    st = _st()
+    live = st.live or st.sample_once()
+    colour = live.get("colour") or {}
+    return _clean({
+        # original contract, preserved
+        "timestamp": live.get("timestamp"),
+        "temperature": live.get("temp_smooth"),
+        "humidity": live.get("hum_smooth"),
+        "pressure": live.get("press_slp"),
+        "compass": live.get("compass"),
+        "pitch": live.get("pitch"),
+        "roll": live.get("roll"),
+        "yaw": live.get("yaw"),
+        "accel": {"x": live.get("ax"), "y": live.get("ay"), "z": live.get("az")},
+        "gyro": {"x": live.get("gx"), "y": live.get("gy"), "z": live.get("gz")},
+        "color": {"clear": colour.get("clear", live.get("lux", 0)),
+                  "red": colour.get("red", live.get("r", 0)),
+                  "green": colour.get("green", live.get("g", 0)),
+                  "blue": colour.get("blue", live.get("b", 0)),
+                  "hex": colour.get("hex", "#334155"),
+                  "cct": colour.get("cct")},
+        # everything the ML layer adds
+        "temperature_raw": live.get("temp_raw"),
+        "temperature_compensated": live.get("temp_c"),
+        "pressure_station": live.get("press_smooth"),
+        "cpu_temp": live.get("cpu_temp"),
+        "cpu_offset": live.get("cpu_offset"),
+        "compensator_k": live.get("compensator_k"),
+        "rates": {
+            "temperature_c_per_h": live.get("temp_rate"),
+            "humidity_pct_per_h": live.get("hum_rate"),
+            "pressure_hpa_per_h": live.get("press_rate"),
+        },
+        "derived": {
+            "dew_point": live.get("dew_c"),
+            "dew_depression": live.get("dew_depression"),
+            "wet_bulb": live.get("wet_bulb"),
+            "vpd_hpa": live.get("vpd"),
+            "absolute_humidity_g_m3": live.get("abs_humidity"),
+            "heat_index": live.get("heat_index"),
+            "cloud_index": live.get("cloud_index"),
+            "solar_elevation": live.get("solar_elevation"),
+            "solar_azimuth": live.get("solar_azimuth"),
+            "clear_sky_wm2": live.get("clear_sky_wm2"),
+        },
+        "health": live.get("health"),
+        "novelty_d2": live.get("novelty_d2"),
+        "simulated": live.get("simulated"),
+    })
+
+
+@app.get("/api/history")
+def history(hours: float = Query(6.0, gt=0, le=24 * 90),
+            max_points: int = Query(720, ge=10, le=5000)) -> Dict:
+    st = _st()
+    cols = ["ts", "temp_smooth", "hum_smooth", "press_slp", "dew_c",
+            "temp_rate", "press_rate", "lux"]
+    w = st.store.window(hours, cols)
+    n = w["ts"].size
+    if n == 0:
+        return {"n": 0, "series": {}}
+    stride = max(1, n // max_points)
+    out = {c: w[c][::stride] for c in cols}
+    return _clean({
+        "n": int(out["ts"].size),
+        "hours": hours,
+        "series": {
+            "ts": out["ts"].tolist(),
+            "temperature": out["temp_smooth"].tolist(),
+            "humidity": out["hum_smooth"].tolist(),
+            "pressure": out["press_slp"].tolist(),
+            "dew_point": out["dew_c"].tolist(),
+            "temperature_rate": out["temp_rate"].tolist(),
+            "pressure_rate": out["press_rate"].tolist(),
+            "lux": out["lux"].tolist(),
+        },
+    })
+
+
+@app.get("/api/history/range")
+def history_range(start: Optional[float] = None, end: Optional[float] = None,
+                  hours: Optional[float] = None,
+                  bucket: Optional[int] = Query(None, ge=30, le=604800)) -> Dict:
+    """Bucket-aggregated telemetry for an arbitrary window.
+
+    Accepts either an explicit epoch `start`/`end` pair or a trailing
+    `hours` span. The bucket is chosen automatically from the span unless
+    you pin it, so a request for a year does not try to serialise a year
+    of five-minute rows to a browser.
+    """
+    st = _st()
+    now = time.time()
+    if hours is not None:
+        start, end = now - hours * 3600.0, now
+    if start is None or end is None:
+        raise HTTPException(422, "provide start and end, or hours")
+    if end - start > 366 * 86400:
+        raise HTTPException(422, "range limited to one year")
+    data = st.store.range_series(start, end, bucket)
+    return _clean(data)
+
+
+@app.get("/api/history/daily")
+def history_daily(days: int = Query(30, ge=1, le=400)) -> Dict:
+    st = _st()
+    end = time.time()
+    start = end - days * 86400.0
+    return _clean({"days": st.store.daily_summary(start, end)})
+
+
+@app.get("/api/records")
+def records() -> Dict:
+    """All-time extremes held by this station, each with its timestamp."""
+    return _clean(_st().store.extremes())
+
+
+@app.get("/api/storage")
+def storage_stats() -> Dict:
+    """Rows per resolution tier plus database size, so retention is visible."""
+    st = _st()
+    return _clean({
+        **st.store.storage_stats(),
+        "policy": {
+            "raw_retention_days": CONFIG.storage.raw_retention_days,
+            "five_min_retention_days": CONFIG.storage.five_min_retention_days,
+            "note": "Nothing is deleted, only downsampled. Rows older than the raw "
+                    "window fold into 5-minute means, then into hourly means. A "
+                    "year of history lands around 30 MB.",
+        },
+    })
+
+
+@app.get("/api/export.csv")
+def export_csv(start: Optional[float] = None, end: Optional[float] = None,
+               hours: Optional[float] = None):
+    st = _st()
+    now = time.time()
+    if hours is not None:
+        start, end = now - hours * 3600.0, now
+    if start is None or end is None:
+        raise HTTPException(422, "provide start and end, or hours")
+    stamp = time.strftime("%Y%m%d-%H%M", time.localtime(start))
+    return StreamingResponse(
+        st.store.iter_csv(start, end),
+        media_type="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="ashvale-{stamp}.csv"'},
+    )
+
+
+@app.get("/api/methods")
+def methods_doc() -> Dict:
+    """The Methods tab is generated from this, so it cannot drift from the code."""
+    return _clean(describe(CONFIG))
+
+
+@app.get("/api/forecast")
+def forecast(target: Optional[str] = None, refresh: bool = False) -> Dict:
+    st = _st()
+    if refresh or not st.forecast_bundle:
+        st.refresh_forecasts()
+    # A cold station has no forecast yet. Return the empty shape rather than
+    # a bare {}, so a client never has to distinguish "no data" from "no key".
+    bundle = dict(st.forecast_bundle) or {
+        "issued_ts": None, "anchors": {},
+        "targets": {t: [] for t in CONFIG.model.targets},
+        "warming_up": True,
+    }
+    if target:
+        if target not in bundle.get("targets", {}):
+            raise HTTPException(404, f"unknown target '{target}'")
+        bundle["targets"] = {target: bundle["targets"][target]}
+    return _clean(bundle)
+
+
+@app.get("/api/outlook")
+def outlook() -> Dict:
+    """Days 2 to 7. Climatology plus a decaying anomaly, honestly labelled."""
+    st = _st()
+    if not st.outlook_bundle:
+        st.refresh_forecasts()
+    base = st.outlook_bundle or {
+        "issued_ts": None, "ready": False, "annual_terms": False,
+        "history_days": round(st.store.span_days(), 2),
+        "targets": {t: [] for t in CONFIG.model.targets},
+    }
+    return _clean({
+        **base,
+        "method": "harmonic climatology with exponentially decaying anomaly",
+        "caveat": "A single point sensor cannot observe approaching systems. "
+                  "Treat days 2 to 7 as a climatological outlook, not a forecast.",
+    })
+
+
+@app.get("/api/precipitation")
+def precipitation() -> Dict:
+    st = _st()
+    return _clean(st.precip_bundle or {})
+
+
+@app.get("/api/anomaly")
+def anomaly() -> Dict:
+    st = _st()
+    return _clean({
+        **(st.anomaly_bundle or {}),
+        "events": st.monitor.recent(20),
+    })
+
+
+@app.get("/api/models")
+def models() -> Dict:
+    st = _st()
+    return _clean({
+        "nowcast": st.nowcast.diagnostics(),
+        "climatology": {
+            "ready": st.climatology.ready,
+            "annual_terms": st.climatology.use_annual,
+            "history_days": round(st.climatology.n_days, 2),
+            "residual_std": st.climatology.resid_std,
+        },
+        "precipitation": {
+            "coefficients": st.precip.coefficients(),
+            "strong_labels": st.precip.n_strong,
+            "weak_labels": st.precip.n_weak,
+            "logloss_ewma": st.precip.ewma_logloss,
+        },
+        "calibration": st.tracker.compensator.to_dict(),
+    })
+
+
+@app.get("/api/scorecard")
+def scorecard() -> Dict:
+    st = _st()
+    rows = st.store.scorecard()
+    return _clean({
+        "rows": rows,
+        "explainer": "skill = 1 - MAE/MAE_persistence. Above zero means the "
+                     "model beats 'nothing changes'. Below zero means it does not, "
+                     "and persistence should be shipped instead.",
+    })
+
+
+@app.post("/api/verify")
+def verify_now() -> Dict:
+    return _clean(_st().verify())
+
+
+@app.post("/api/train")
+def train_now(hours: float = Query(24 * 30, gt=1)) -> Dict:
+    return _clean(_st().train(hours))
+
+
+@app.post("/api/label")
+def add_label(body: LabelIn) -> Dict:
+    return _clean(_st().add_label(body.kind, body.value, body.ts, body.note))
+
+
+@app.post("/api/calibrate")
+def calibrate(body: CalibrationIn) -> Dict:
+    st = _st()
+    if body.reset:
+        return _clean(st.reset_calibration())
+    if body.reference_c is None:
+        raise HTTPException(422, "provide reference_c, or reset=true")
+    result = st.calibrate_temperature(body.reference_c)
+    if "error" in result:
+        raise HTTPException(409, result["error"])
+    return _clean(result)
+
+
+@app.get("/api/status")
+def status() -> Dict:
+    st = _st()
+    return _clean({
+        **st.status(),
+        "display_frame": display.frame_name if display else None,
+        "events": st.store.recent_events(15),
+    })
+
+
+@app.get("/api/events")
+def events(limit: int = Query(50, ge=1, le=500)) -> List[Dict]:
+    return _clean(_st().store.recent_events(limit))
+
+
+@app.get("/api/stream")
+async def stream():
+    """Server-sent events. One connection instead of a poll every 2 seconds,
+    which on a Zero 2 W is the difference between 4% and 0.4% CPU."""
+    async def gen():
+        while True:
+            st = _st()
+            payload = {
+                "telemetry": telemetry(),
+                "precipitation": _clean(st.precip_bundle or {}),
+                "health": st.monitor.health.overall,
+                "drift_stress": round(st.monitor.drift.stress, 3),
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+            await asyncio.sleep(2.0)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard() -> str:
+    return DASHBOARD_HTML

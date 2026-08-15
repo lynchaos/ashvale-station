@@ -1,0 +1,225 @@
+# Copyright 2026 Kemal Yaylali
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""State estimation: the layer between a noisy sensor and an honest number.
+
+Two jobs here, both familiar from soft-sensor work:
+
+1. `ThermalCompensator` removes the SoC self-heating bias. The classic
+   Sense HAT correction `T = T_sensor - k (T_cpu - T_sensor)` is a
+   one-parameter grey-box model. We keep the structure and estimate `k`
+   recursively whenever a trusted reference reading is supplied, which
+   beats hard-coding 1/1.5 and hoping.
+
+2. `SignalTracker` runs a constant-velocity Kalman filter per signal.
+   The filtered level is a denoised measurement; the filtered rate is the
+   thing you actually want for weather. A finite difference of a 0.05 hPa
+   noise floor over 5 minutes is garbage. A Kalman rate is not.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Dict, Optional
+
+import numpy as np
+
+
+@dataclass
+class KalmanCV:
+    """Constant-velocity Kalman filter for one scalar signal.
+
+    State x = [level, rate]. Process noise is the standard continuous
+    white-noise-acceleration model, so `q` has units of (signal/s^2)^2/s
+    and is the only knob that matters: raise it to track faster, lower it
+    to smooth harder.
+    """
+
+    q: float
+    r: float
+    x: np.ndarray = field(default_factory=lambda: np.zeros(2))
+    P: np.ndarray = field(default_factory=lambda: np.eye(2) * 1e3)
+    initialised: bool = False
+    nis: float = 0.0  # normalised innovation squared, for health monitoring
+
+    def update(self, z: float, dt: float) -> tuple[float, float]:
+        if not np.isfinite(z):
+            return float(self.x[0]), float(self.x[1])
+        if not self.initialised:
+            self.x = np.array([z, 0.0])
+            self.P = np.array([[self.r, 0.0], [0.0, 1e-4]])
+            self.initialised = True
+            return z, 0.0
+
+        dt = float(max(min(dt, 3600.0), 1e-3))
+        F = np.array([[1.0, dt], [0.0, 1.0]])
+        Q = self.q * np.array([[dt ** 3 / 3.0, dt ** 2 / 2.0],
+                               [dt ** 2 / 2.0, dt]])
+
+        # predict
+        self.x = F @ self.x
+        self.P = F @ self.P @ F.T + Q
+
+        # update
+        H = np.array([[1.0, 0.0]])
+        y = float(z) - float((H @ self.x)[0])
+        S = float((H @ self.P @ H.T)[0, 0]) + self.r
+        K = (self.P @ H.T) / S
+        self.x = self.x + (K.flatten() * y)
+        I_KH = np.eye(2) - K @ H
+        self.P = I_KH @ self.P @ I_KH.T + K @ K.T * self.r   # Joseph form, stays PSD
+
+        self.nis = (y * y) / S
+        return float(self.x[0]), float(self.x[1])
+
+    @property
+    def level(self) -> float:
+        return float(self.x[0])
+
+    @property
+    def rate(self) -> float:
+        """Signal units per second."""
+        return float(self.x[1])
+
+    def to_dict(self) -> Dict:
+        return {"q": self.q, "r": self.r, "x": self.x.tolist(),
+                "P": self.P.tolist(), "initialised": self.initialised}
+
+    @classmethod
+    def from_dict(cls, d: Dict) -> "KalmanCV":
+        kf = cls(q=d["q"], r=d["r"])
+        kf.x = np.array(d["x"], dtype=float)
+        kf.P = np.array(d["P"], dtype=float)
+        kf.initialised = bool(d["initialised"])
+        return kf
+
+
+class ThermalCompensator:
+    """Grey-box removal of SoC self-heating.
+
+    Model: T_true = T_sensor - k * (T_cpu - T_sensor), k >= 0.
+
+    `k` is updated by recursive least squares whenever `calibrate()` is
+    called with a trusted reference temperature (a mercury thermometer, a
+    second logger, or a nearby METAR reading). Until then the configured
+    prior is used and clamped to a physically sane band, because a runaway
+    `k` produces confident nonsense, which is worse than a mild bias.
+    """
+
+    def __init__(self, k0: float = 0.55, k_min: float = 0.15, k_max: float = 1.2,
+                 forgetting: float = 0.98):
+        self.k = float(k0)
+        self.k_min, self.k_max = float(k_min), float(k_max)
+        self.P = 10.0
+        self.lam = float(forgetting)
+        self.n_calibrations = 0
+        self.last_residual = 0.0
+
+    def compensate(self, t_sensor: float, t_cpu: float) -> float:
+        if not (np.isfinite(t_sensor) and np.isfinite(t_cpu)):
+            return float(t_sensor)
+        delta = max(t_cpu - t_sensor, 0.0)
+        return float(t_sensor - self.k * delta)
+
+    def calibrate(self, t_sensor: float, t_cpu: float, t_reference: float) -> Dict:
+        """One RLS step on k. Regressor is the CPU/sensor gradient."""
+        phi = max(t_cpu - t_sensor, 0.0)
+        target = t_sensor - t_reference          # what k*phi should equal
+        denom = self.lam + phi * self.P * phi
+        gain = (self.P * phi) / denom if denom > 1e-12 else 0.0
+        residual = target - self.k * phi
+        self.k = float(np.clip(self.k + gain * residual, self.k_min, self.k_max))
+        self.P = float((self.P - gain * phi * self.P) / self.lam)
+        self.P = float(np.clip(self.P, 1e-6, 1e4))
+        self.n_calibrations += 1
+        self.last_residual = float(residual)
+        return {"k": self.k, "residual": self.last_residual, "n": self.n_calibrations}
+
+    def to_dict(self) -> Dict:
+        return {"k": self.k, "P": self.P, "lam": self.lam, "k_min": self.k_min,
+                "k_max": self.k_max, "n": self.n_calibrations}
+
+    @classmethod
+    def from_dict(cls, d: Dict) -> "ThermalCompensator":
+        tc = cls(d["k"], d["k_min"], d["k_max"], d["lam"])
+        tc.P = d["P"]
+        tc.n_calibrations = d.get("n", 0)
+        return tc
+
+
+class SignalTracker:
+    """Bank of Kalman filters plus the compensator, driven at sample rate."""
+
+    def __init__(self, cfg):
+        self.compensator = ThermalCompensator(
+            cfg.sensor.cpu_heat_k, cfg.sensor.cpu_heat_k_min,
+            cfg.sensor.cpu_heat_k_max,
+        )
+        self.filters = {
+            "temperature": KalmanCV(cfg.sensor.kalman_q_temp, cfg.sensor.kalman_r_temp),
+            "humidity": KalmanCV(cfg.sensor.kalman_q_hum, cfg.sensor.kalman_r_hum),
+            "pressure": KalmanCV(cfg.sensor.kalman_q_press, cfg.sensor.kalman_r_press),
+        }
+        self.last_ts: Optional[float] = None
+
+    def step(self, ts: float, temp_raw: float, hum: float, press: float,
+             cpu_temp: float) -> Dict[str, float]:
+        dt = (ts - self.last_ts) if self.last_ts is not None else 1.0
+        self.last_ts = ts
+
+        temp_c = self.compensator.compensate(temp_raw, cpu_temp)
+        t_lvl, t_rate = self.filters["temperature"].update(temp_c, dt)
+        h_lvl, h_rate = self.filters["humidity"].update(hum, dt)
+        p_lvl, p_rate = self.filters["pressure"].update(press, dt)
+
+        return {
+            "temp_c": temp_c,
+            "temp_smooth": t_lvl,
+            "temp_rate": t_rate * 3600.0,      # C per hour
+            "hum_smooth": h_lvl,
+            "hum_rate": h_rate * 3600.0,       # % per hour
+            "press_smooth": p_lvl,
+            "press_rate": p_rate * 3600.0,     # hPa per hour, the forecaster's gold
+            "nis_temp": self.filters["temperature"].nis,
+            "nis_press": self.filters["pressure"].nis,
+        }
+
+    def to_dict(self) -> Dict:
+        return {
+            "compensator": self.compensator.to_dict(),
+            "filters": {k: v.to_dict() for k, v in self.filters.items()},
+            "last_ts": self.last_ts,
+        }
+
+    def load_dict(self, d: Dict) -> None:
+        self.compensator = ThermalCompensator.from_dict(d["compensator"])
+        self.filters = {k: KalmanCV.from_dict(v) for k, v in d["filters"].items()}
+        self.last_ts = d.get("last_ts")
+
+
+def stuck_sensor_score(values: np.ndarray, window: int = 60) -> float:
+    """Fraction of the last `window` samples that are bit-identical.
+
+    An HTS221 that latches is the quietest failure mode there is: the
+    dashboard looks perfect, the model trains happily, and every forecast
+    is confidently wrong. This is the cheapest possible smoke alarm.
+    """
+    if values.size < 5:
+        return 0.0
+    tail = values[-window:]
+    tail = tail[np.isfinite(tail)]
+    if tail.size < 5:
+        return 0.0
+    return float(np.mean(np.abs(np.diff(tail)) < 1e-9))

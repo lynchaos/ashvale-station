@@ -1,0 +1,11 @@
+# Core: everything the ML suite needs. No torch, no sklearn, no pandas.
+# The learners are pure numpy by design so a Zero 2 W stays under 120 MB RSS.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+numpy>=1.24
+PyYAML>=6.0
+
+# Hardware only. Skip these on a laptop and the simulator takes over.
+# sense-hat>=2.6.0
+# smbus2>=0.4.3

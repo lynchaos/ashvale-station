@@ -1,0 +1,26 @@
+[Unit]
+Description=Ashvale Station forecast service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/weather-station/zero2w-weather
+ExecStart=/home/pi/weather-station/zero2w-weather/.venv/bin/python run.py
+Restart=always
+RestartSec=10
+
+# A Zero 2 W has 512 MB. Cap the service so a runaway allocation takes the
+# service down instead of the whole board.
+MemoryMax=280M
+CPUWeight=70
+Nice=5
+
+# The SD card is a consumable: keep journald from writing every heartbeat.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ashvale
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ashvale-station"
+version = "1.0.0"
+description = "Online machine learning weather forecasting for a Raspberry Pi and Sense HAT, with calibrated uncertainty and public self-verification."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Kemal Yaylali", email = "kemal.yaylali@gmail.com" },
+]
+maintainers = [
+    { name = "Kemal Yaylali", email = "kemal.yaylali@gmail.com" },
+]
+keywords = [
+    "weather", "forecasting", "raspberry-pi", "sense-hat", "kalman-filter",
+    "recursive-least-squares", "conformal-prediction", "online-learning",
+    "time-series", "state-estimation", "edge-ml", "iot",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Monitoring",
+]
+
+# Deliberately minimal. The learners are pure numpy so the whole process fits
+# in about 150 MB of RSS on a 512 MB board. Anything added here should be
+# justified against that budget.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.6",
+    "numpy>=1.24",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Hardware access. Prefer the apt packages on a Pi: sense-hat pulls in
+# RTIMULib, which is a genuine ordeal to build inside a clean venv.
+hardware = [
+    "sense-hat>=2.6.0",
+    "smbus2>=0.4.3",
+]
+dev = [
+    "httpx>=0.27",
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/lynchaos/ashvale-station"
+Repository = "https://github.com/lynchaos/ashvale-station"
+Issues = "https://github.com/lynchaos/ashvale-station/issues"
+Changelog = "https://github.com/lynchaos/ashvale-station/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/lynchaos/ashvale-station/blob/main/docs/DESIGN.md"
+
+[project.scripts]
+ashvale = "run:main"
+
+[tool.setuptools]
+packages = ["ashvale", "ashvale.models"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]

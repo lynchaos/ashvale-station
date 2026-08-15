@@ -1,0 +1,24 @@
+Ashvale Station
+Copyright 2026 Kemal Yaylali
+
+This product includes software developed by Kemal Yaylali
+(https://github.com/lynchaos/ashvale-station).
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file
+for the full terms.
+
+---
+
+Third-party components loaded by the browser dashboard at runtime and
+NOT redistributed in this repository:
+
+  Chart.js               MIT License      https://www.chartjs.org/
+  chartjs-plugin-zoom    MIT License      https://github.com/chartjs/chartjs-plugin-zoom
+  Hammer.js              MIT License      https://hammerjs.github.io/
+  Tailwind CSS           MIT License      https://tailwindcss.com/
+  Plus Jakarta Sans      SIL OFL 1.1      https://fonts.google.com/specimen/Plus+Jakarta+Sans
+  JetBrains Mono         SIL OFL 1.1      https://www.jetbrains.com/lp/mono/
+
+The Zambretti forecast in ashvale/models/precip.py is an original
+re-parameterisation onto the historic 26-point scale, not a transcription
+of any particular published implementation.

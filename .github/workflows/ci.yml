@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install httpx
+
+      - name: Byte-compile every module
+        run: python -m compileall -q ashvale scripts run.py
+
+      - name: Import check
+        run: python -c "import ashvale.api; print('imports ok')"
+
+      - name: Seed synthetic history
+        run: python scripts/simulate.py --days 10 --wipe
+
+      # The backtest is the real test: it exercises features, the RLS heads,
+      # climatology and conformal calibration end to end, and fails loudly if
+      # any of them stop producing finite numbers.
+      - name: Walk-forward backtest
+        run: python scripts/evaluate.py --train-frac 0.6 --hours 300
+
+      - name: Exercise the API surface
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          import ashvale.api as api
+          with TestClient(api.app) as c:
+              for ep in ["/api/telemetry", "/api/status", "/api/forecast",
+                         "/api/outlook", "/api/precipitation", "/api/anomaly",
+                         "/api/models", "/api/scorecard", "/api/records",
+                         "/api/storage", "/api/methods",
+                         "/api/history/range?hours=24",
+                         "/api/history/daily?days=5", "/"]:
+                  r = c.get(ep)
+                  assert r.status_code == 200, (ep, r.status_code, r.text[:200])
+              assert c.post("/api/train").json()["trained"] is True
+              assert len(c.get("/api/export.csv?hours=6").text.splitlines()) > 1
+          print("api surface ok")
+          PY

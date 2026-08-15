@@ -1,0 +1,35 @@
+# Station runtime state. Never commit these: the database is your logged
+# history and the state file holds trained model parameters. Both are
+# machine-specific and both grow without bound.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local overrides: keep config.yaml tracked as the documented default,
+# but let people keep a private one with their own coordinates.
+config.local.yaml
+
+# Personal deployment notes: LAN addresses, hostnames, SSH details.
+# Kept locally, never published.
+HANDOVER.md

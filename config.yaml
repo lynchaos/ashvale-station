@@ -1,0 +1,35 @@
+# Ashvale Station configuration. Every field is optional: anything omitted
+# falls back to the dataclass default in ashvale/config.py.
+
+site:
+  name: ashvale-labs-weather-station
+  latitude: 52.2053            # Cambridge, UK
+  longitude: 0.1218
+  altitude_m: 15.0             # matters more than you would think, see README
+  timezone: Europe/London
+  indoors: true                # be honest here, it changes how forecasts are worded
+
+sensor:
+  sample_period_s: 2.0
+  persist_period_s: 30.0
+  rotation_deg: 90
+  cpu_heat_k: 0.55             # starting point only, calibrate from the dashboard
+  kalman_q_temp: 2.0e-6        # raise to track faster, lower to smooth harder
+  kalman_r_temp: 0.02
+
+model:
+  grid_s: 300
+  horizons_s: [900, 3600, 10800, 21600, 43200, 86400]
+  rls_forgetting: 0.9985       # effective memory ~ 11 h on a 5-minute grid
+  conformal_alpha: 0.10        # 90% prediction intervals
+  train_period_s: 600
+  min_rows_to_train: 120
+
+storage:
+  raw_retention_days: 7.0
+  five_min_retention_days: 90.0
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  led_enabled: true
