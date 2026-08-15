@@ -24,13 +24,17 @@ same code to the Pi unchanged.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
 
 from .physics import dew_point, sea_level_pressure, solar_position
+
+log = logging.getLogger(__name__)
 
 TCS3400_ENABLE = 0x80
 TCS3400_ATIME = 0x81
@@ -103,6 +107,95 @@ class SimulatedBoard:
 
     def clear(self, *_a, **_k):  # LED no-op
         pass
+
+
+class OutdoorProbe:
+    """Optional DS18B20 on the 1-Wire bus, read through the kernel's w1 driver.
+
+    Why this matters more than any model change: indoors the station forecasts
+    a room. Pressure passes through walls, temperature and humidity do not. One
+    three-pound sensor on a metre of cable outside the window removes the single
+    largest caveat in the project.
+
+    No new dependency. The kernel exposes each probe as a text file under
+    /sys/bus/w1/devices/28-*/w1_slave, so this is a file read and two string
+    splits. Enable with `dtoverlay=w1-gpio` in /boot/firmware/config.txt.
+
+    How it fails: the DS18B20 takes up to 750 ms to convert, and the driver
+    blocks for that whole time. Reading it on the 2 s sample loop would eat a
+    third of the budget on a single-issue core, so it is polled on its own
+    slower cadence and the last good value is reused in between. A probe that
+    goes missing (cable pulled, bad CRC) returns None rather than a stale value
+    forever: `age_s` lets the caller decide when to stop trusting it.
+    """
+
+    ROOT = "/sys/bus/w1/devices"
+
+    def __init__(self, min_period_s: float = 20.0) -> None:
+        self.min_period_s = float(min_period_s)
+        self.device: Optional[str] = None
+        self.available = False
+        self.last_value: Optional[float] = None
+        self.last_ts: Optional[float] = None
+        self.errors = 0
+        self._discover()
+
+    def _discover(self) -> None:
+        try:
+            root = Path(self.ROOT)
+            if not root.is_dir():
+                return
+            probes = sorted(p for p in root.glob("28-*") if (p / "w1_slave").exists())
+            if probes:
+                self.device = str(probes[0] / "w1_slave")
+                self.available = True
+                log.info("outdoor probe found at %s", self.device)
+        except OSError as exc:
+            log.warning("1-wire scan failed: %r", exc)
+
+    def read(self) -> Optional[float]:
+        """Celsius, or None. Cached between polls so the sample loop never blocks."""
+        if not self.available or self.device is None:
+            return None
+        now = time.time()
+        if self.last_ts is not None and (now - self.last_ts) < self.min_period_s:
+            return self.last_value
+        try:
+            with open(self.device, "r") as fh:
+                text = fh.read()
+        except OSError as exc:
+            self.errors += 1
+            log.warning("outdoor probe read failed: %r", exc)
+            return self.last_value
+        # Two lines: the first ends in YES only when the CRC checked out.
+        if "YES" not in text.split("\n")[0]:
+            self.errors += 1
+            return self.last_value
+        marker = text.find("t=")
+        if marker < 0:
+            self.errors += 1
+            return self.last_value
+        try:
+            milli = int(text[marker + 2:].strip())
+        except ValueError:
+            self.errors += 1
+            return self.last_value
+        # 85000 is the DS18B20 power-on default and means "never converted".
+        if milli == 85000:
+            self.errors += 1
+            return self.last_value
+        value = milli / 1000.0
+        if not (-55.0 <= value <= 125.0):
+            self.errors += 1
+            return self.last_value
+        self.last_value = value
+        self.last_ts = now
+        return value
+
+    def status(self) -> Dict[str, Any]:
+        age = None if self.last_ts is None else round(time.time() - self.last_ts, 1)
+        return {"available": self.available, "device": self.device,
+                "value_c": self.last_value, "age_s": age, "errors": self.errors}
 
 
 class SenseBoard:

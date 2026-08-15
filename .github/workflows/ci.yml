@@ -27,7 +27,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install httpx
+          pip install httpx pytest
 
       - name: Lint
         run: |
@@ -42,6 +42,13 @@ jobs:
 
       - name: Seed synthetic history
         run: python scripts/simulate.py --days 10 --wipe
+
+      # Unit tests over the pure numerics: physics closed forms, the compensator
+      # inverse properties, the Kalman covariance invariants and the RLS trace
+      # cap. Run after seeding so the recompute tests have history rather than skipping.
+      - name: Unit tests
+        run: python -m pytest tests/ -q
+
 
       # The backtest is the real test: it exercises features, the RLS heads,
       # climatology and conformal calibration end to end, and fails loudly if

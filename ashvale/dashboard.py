@@ -48,14 +48,15 @@ DASHBOARD_HTML = r"""
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ashvale Station</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<!-- Served from the station, not a CDN, so the dashboard renders on a LAN with
+     no internet at all. See ashvale/static/. -->
+<script src="/static/tailwind.js"></script>
+<link rel="stylesheet" href="/static/katex.min.css">
+<script defer src="/static/katex.min.js"></script>
+<script src="/static/chart.umd.min.js"></script>
+<script src="/static/hammer.min.js"></script>
+<script src="/static/chartjs-plugin-zoom.min.js"></script>
+<link rel="stylesheet" href="/static/gfonts.css">
 <style>
   body { font-family:'Plus Jakarta Sans',sans-serif; }
   .font-mono { font-family:'JetBrains Mono',monospace; }
@@ -404,7 +405,7 @@ DASHBOARD_HTML = r"""
   <!-- Everything the estimator and the 18 learners are actually carrying, read
        straight off the live objects. No internal scrollers: the head bank is a
        fixed 18 rows and the attribution list is capped at what fits. -->
-  <section id="pane-nerd" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr]">
+  <section id="pane-nerd" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr_auto]">
 
     <div class="glass rounded-2xl p-3 lg:col-span-3">
       <div class="flex items-baseline justify-between mb-1.5">
@@ -449,6 +450,14 @@ DASHBOARD_HTML = r"""
         <h2 class="text-sm font-bold mb-1">Precipitation</h2>
         <div id="n-precip" class="font-mono text-[10px] space-y-0.5"></div>
       </div>
+    </div>
+
+    <div class="glass rounded-2xl p-3 lg:col-span-4 shrink-0">
+      <div class="flex items-baseline justify-between mb-1.5">
+        <h2 class="text-sm font-bold">Reliability</h2>
+        <span class="text-[9px] font-mono text-slate-600 uppercase">realised coverage against the 90% nominal</span>
+      </div>
+      <div id="n-rel" class="grid grid-cols-3 sm:grid-cols-6 gap-x-3 gap-y-0.5 font-mono text-[9px]"></div>
     </div>
   </section>
 
@@ -965,6 +974,15 @@ el('m-hcalrst').addEventListener('click', async () => {
 /* ---------------- STATS FOR NERDS ---------------- */
 let nerdDoc = null, nerdHead = null;
 const HL = (h) => h<3600 ? (h/60)+'m' : h<86400 ? (h/3600)+'h' : (h/86400)+'d';
+// A 21-bin histogram drawn as inline divs. No canvas: Chart.js instances cost
+// memory and this is three tiny plots that never need interaction.
+function histo(counts, colour, h) {
+  if (!counts || !counts.length) return '<div class="text-slate-700 text-[9px]">warming up</div>';
+  const mx = Math.max.apply(null, counts) || 1;
+  return '<div class="flex items-end gap-px" style="height:'+h+'px">'+
+    counts.map(c=>'<div style="flex:1;height:'+Math.max(1,(c/mx)*h)+'px;background:'+colour+
+      ';opacity:'+(0.35+0.65*(c/mx))+'"></div>').join('')+'</div>';
+}
 function bar(frac, colour) {
   const w = Math.max(0, Math.min(1, frac||0))*100;
   return '<div class="h-1 bg-slate-950 rounded-full overflow-hidden border border-slate-800/70">'+
@@ -975,6 +993,7 @@ async function loadNerd() {
   nerdDoc = d;
 
   const COL = {temperature:'#f59e0b', humidity:'#06b6d4', pressure:'#a78bfa'};
+  const iv = d.innovation||{};
   el('n-filters').innerHTML = Object.keys(d.filters||{}).map(k=>{
     const f = d.filters[k];
     // NIS is chi-square(1) distributed when consistent, so 1 is the target and
@@ -987,6 +1006,12 @@ async function loadNerd() {
       '<div class="flex justify-between text-slate-500 mt-1">&sigma; level<span class="text-slate-300">'+fmt(f.sigma_level,4)+'</span></div>'+
       '<div class="flex justify-between text-slate-500">P rate<span class="text-slate-300">'+f.p_rate.toExponential(2)+'</span></div>'+
       '<div class="flex justify-between text-slate-600">q / r<span>'+f.q.toExponential(1)+' / '+fmt(f.r,3)+'</span></div>'+
+      // innovation shape: should look standard normal if the filter is honest
+      '<div class="mt-1 pt-1 border-t border-slate-800/70">'+
+      histo((iv[k]||{}).counts, COL[k], 16)+
+      '<div class="flex justify-between text-slate-600 mt-0.5 text-[9px]">'+
+      '<span>innov &mu;='+fmt((iv[k]||{}).mean,2)+' &sigma;='+fmt((iv[k]||{}).std,2)+'</span>'+
+      '<span>skew '+fmt((iv[k]||{}).skew,2)+'</span></div></div>'+
       '</div>';
   }).join('');
 
@@ -1004,6 +1029,7 @@ async function loadNerd() {
   el('n-heads').innerHTML = heads.length ? '<table class="w-full font-mono text-[10px]">'+
     '<thead class="text-slate-600 uppercase text-[9px]"><tr class="border-b border-slate-800">'+
     '<th class="text-left py-0.5">head</th><th class="text-right">n</th><th class="text-right">tr P</th>'+
+    '<th class="text-right">cond</th>'+
     '<th class="text-right">|&theta;|</th><th class="text-right">rmse</th><th class="text-right">&alpha;</th>'+
     '<th class="text-right">cov</th><th class="text-right">&plusmn;</th><th class="text-right pl-2">p/c/l</th></tr></thead><tbody>'+
     heads.map(h=>{
@@ -1015,6 +1041,10 @@ async function loadNerd() {
         '<td class="py-0.5 text-slate-400">'+h.target.slice(0,4)+' <span class="text-slate-600">'+HL(h.horizon_s)+'</span></td>'+
         '<td class="text-right text-slate-600">'+h.n_updates+'</td>'+
         '<td class="text-right '+(sat>0.95?'text-rose-300':'text-slate-400')+'">'+h.trace_p.toExponential(1)+'</td>'+
+        // a huge condition number means some of the 33 directions are barely
+        // excited, so their weights are close to arbitrary
+        '<td class="text-right '+(h.cond_p>1e8?'text-amber-300':'text-slate-500')+'">'+
+        (isFinite(h.cond_p)?h.cond_p.toExponential(0):'inf')+'</td>'+
         '<td class="text-right text-slate-300">'+fmt(h.theta_norm,1)+'</td>'+
         '<td class="text-right text-slate-300">'+fmt(h.rmse_ewma,3)+'</td>'+
         '<td class="text-right text-indigo-300">'+fmt(h.alpha,3)+'</td>'+
@@ -1024,6 +1054,16 @@ async function loadNerd() {
         Math.round((w.climatology||0)*100)+'/'+Math.round((w.learned||0)*100)+'</td></tr>';
     }).join('')+'</tbody></table>'
     : '<p class="text-[10px] text-slate-600 font-mono">No heads trained yet.</p>';
+
+  const rel = ((d.reliability||{}).points)||[];
+  el('n-rel').innerHTML = rel.length ? rel.map(pt=>{
+    const gap = pt.realised - pt.nominal;
+    const cls = Math.abs(gap)<0.03 ? '#34d399' : Math.abs(gap)<0.06 ? '#fbbf24' : '#fb7185';
+    return '<div class="flex items-center gap-1.5">'+
+      '<span class="text-slate-600" style="width:42%">'+pt.target.slice(0,4)+' '+HL(pt.horizon_s)+'</span>'+
+      '<span class="flex-1">'+bar(pt.realised, cls)+'</span>'+
+      '<span style="width:26%;text-align:right;color:'+cls+'">'+(pt.realised*100).toFixed(0)+'%</span></div>';
+  }).join('') : '<p class="text-slate-600">Nothing scored yet.</p>';
 
   const sel = el('n-head-sel');
   if (sel.options.length !== heads.length) {

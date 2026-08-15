@@ -42,13 +42,13 @@ import numpy as np
 
 from . import physics
 from .config import Config
-from .estimation import SignalTracker
+from .estimation import KalmanCV, SignalTracker
 from .features import build_features
 from .models.anomaly import AnomalyMonitor
 from .models.climatology import HarmonicClimatology
 from .models.nowcast import NowcastEnsemble
 from .models.precip import PrecipitationModel, proxy_wet_label, zambretti
-from .sensors import SenseBoard, enrich
+from .sensors import OutdoorProbe, SenseBoard, enrich
 from .storage import Store, resample
 
 STATE_VERSION = 1
@@ -65,6 +65,9 @@ class Station:
             latitude=cfg.site.latitude,
             longitude=cfg.site.longitude,
         )
+        # Optional and entirely absent on a board without one wired up.
+        self.probe = (OutdoorProbe(cfg.sensor.outdoor_probe_period_s)
+                      if cfg.sensor.outdoor_probe else None)
         self.tracker = SignalTracker(cfg)
         self.nowcast = NowcastEnsemble(cfg.model.targets, cfg.model.horizons_s, cfg.model)
         self.climatology = HarmonicClimatology(
@@ -191,6 +194,7 @@ class Station:
             "cpu_offset": (raw.get("cpu_temp") or float("nan")) - (raw.get("temp_raw") or float("nan")),
             "compensator_k": self.tracker.compensator.k,
             "hum_offset": self.tracker.hum_compensator.offset,
+            "outdoor_c": (self.probe.read() if self.probe is not None else None),
             "hum_psychrometric": float(est["hum_c"]) - float(raw.get("hum") or float("nan")),
             "health": anomaly["health_overall"],
             "novelty_d2": anomaly["novelty"].get("d2", 0.0),
@@ -265,6 +269,11 @@ class Station:
         result = self.tracker.compensator.calibrate(float(raw), float(cpu), float(reference_c))
         self.store.log_event("calibration", "info",
                              f"k -> {result['k']:.3f} (residual {result['residual']:+.2f} C)")
+        # Discontinuity marker: everything logged before this instant used a
+        # different coefficient. Kept as its own event kind so the scorecard and
+        # the records view can find it without parsing prose.
+        self.store.log_event("discontinuity", "warn",
+                             f"temperature k {result['k']:.4f}")
         return result
 
     def calibrate_humidity(self, reference_pct: float) -> Dict:
@@ -279,6 +288,8 @@ class Station:
         self.store.log_event("calibration", "info",
                              f"rh offset -> {result['offset']:+.2f}% "
                              f"(residual {result['residual']:+.2f}%)")
+        self.store.log_event("discontinuity", "warn",
+                             f"humidity offset {result['offset']:+.4f}")
         return result
 
     def reset_humidity_calibration(self) -> Dict:
@@ -292,6 +303,72 @@ class Station:
         self.store.log_event("calibration", "info",
                              f"rh offset reset to prior {self.cfg.sensor.hum_offset}")
         return {"offset": self.tracker.hum_compensator.offset, "reset": True, "n": 0}
+
+    def recompute_history(self) -> Dict:
+        """Re-derive every compensated column from the stored raw values.
+
+        Why this exists: calibration only changes readings from that moment on,
+        so a correction of any size leaves a step in the record. Measured on this
+        station, one humidity calibration put a 25-point discontinuity through
+        the middle of the day. That contaminates the all-time records with values
+        that were never real weather, and makes the learners train across a jump.
+
+        It is possible at all because the raw columns are never overwritten:
+        `temp_raw`, `cpu_temp` and `hum` are exactly what the sensor reported, so
+        the current coefficients can be applied to the whole history.
+
+        The Kalman levels are re-run rather than shifted, because the filter is
+        not a constant offset. That means the smoothing is *re-derived*, not bit
+        identical to what was logged live: the replay sees the stored cadence,
+        which for tiered rows is coarser than the 2 s the filter runs at. The
+        levels are right, the fine texture of old raw rows is not recoverable.
+        """
+        data = self.store.all_for_recompute()
+        ts = data["ts"]
+        if ts.size == 0:
+            return {"rows": 0, "reason": "no history"}
+
+        t0 = time.time()
+        comp, hcomp = self.tracker.compensator, self.tracker.hum_compensator
+        n = ts.size
+        temp_c = np.empty(n)
+        hum_c = np.empty(n)
+        for i in range(n):
+            tr, cp, hu = data["temp_raw"][i], data["cpu_temp"][i], data["hum"][i]
+            temp_c[i] = comp.compensate(tr, cp) if np.isfinite(tr) and np.isfinite(cp) else tr
+            hum_c[i] = (hcomp.compensate(hu, tr, temp_c[i])
+                        if np.isfinite(hu) and np.isfinite(tr) else hu)
+
+        # Replay the filters over the corrected series. Fresh instances, so an
+        # old contaminated state cannot leak into the re-derivation.
+        kt = KalmanCV(self.cfg.sensor.kalman_q_temp, self.cfg.sensor.kalman_r_temp)
+        kh = KalmanCV(self.cfg.sensor.kalman_q_hum, self.cfg.sensor.kalman_r_hum)
+        temp_s = np.empty(n)
+        temp_r = np.empty(n)
+        hum_s = np.empty(n)
+        prev = None
+        for i in range(n):
+            dt = 1.0 if prev is None else max(ts[i] - prev, 1e-3)
+            prev = ts[i]
+            lvl, rate = kt.update(temp_c[i], dt)
+            temp_s[i], temp_r[i] = lvl, rate * 3600.0
+            hum_s[i], _ = kh.update(hum_c[i], dt)
+
+        dew = np.asarray(physics.dew_point(temp_s, hum_s), dtype=float)
+        slp = np.asarray(physics.sea_level_pressure(
+            data["press"], temp_s, self.cfg.site.altitude_m), dtype=float)
+
+        written = self.store.apply_recompute(ts, {
+            "temp_c": temp_c, "temp_smooth": temp_s, "temp_rate": temp_r,
+            "hum_smooth": hum_s, "dew_c": dew, "press_slp": slp,
+        })
+        secs = time.time() - t0
+        self.store.log_event(
+            "recompute", "info",
+            f"re-derived {written} rows from raw with k={comp.k:.4f}, "
+            f"rh offset={hcomp.offset:+.2f}% in {secs:.1f}s")
+        return {"rows": written, "seconds": round(secs, 2),
+                "k": comp.k, "hum_offset": hcomp.offset}
 
     def reset_calibration(self) -> Dict:
         """Return the self-heating coefficient to its configured prior.

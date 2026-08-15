@@ -30,6 +30,7 @@ Two jobs here, both familiar from soft-sensor work:
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
@@ -54,6 +55,7 @@ class KalmanCV:
     P: np.ndarray = field(default_factory=lambda: np.eye(2) * 1e3)
     initialised: bool = False
     nis: float = 0.0  # normalised innovation squared, for health monitoring
+    innovation_z: float = 0.0
 
     def update(self, z: float, dt: float) -> tuple[float, float]:
         if not np.isfinite(z):
@@ -83,6 +85,11 @@ class KalmanCV:
         self.P = I_KH @ self.P @ I_KH.T + K @ K.T * self.r   # Joseph form, stays PSD
 
         self.nis = (y * y) / S
+        # y/sqrt(S) is the innovation in units of its own predicted spread, so it
+        # is comparable across signals and should look standard normal when the
+        # filter is consistent. Cheap to keep, and the only honest way to see
+        # skew or fat tails rather than inferring them from a single NIS value.
+        self.innovation_z = float(y / np.sqrt(S)) if S > 0 else 0.0
         return float(self.x[0]), float(self.x[1])
 
     @property
@@ -265,6 +272,12 @@ class SignalTracker:
             "pressure": KalmanCV(cfg.sensor.kalman_q_press, cfg.sensor.kalman_r_press),
         }
         self.last_ts: Optional[float] = None
+        # 600 samples per signal is 20 minutes at the live 2 s cadence, about
+        # 14 kB total. Bounded on purpose: this board has 512 MB and an
+        # unbounded diagnostic buffer is a slow memory leak with a nice name.
+        self.innovations: Dict[str, deque] = {
+            k: deque(maxlen=600) for k in self.filters
+        }
 
     def step(self, ts: float, temp_raw: float, hum: float, press: float,
              cpu_temp: float) -> Dict[str, float]:
@@ -278,6 +291,9 @@ class SignalTracker:
         t_lvl, t_rate = self.filters["temperature"].update(temp_c, dt)
         h_lvl, h_rate = self.filters["humidity"].update(hum_c, dt)
         p_lvl, p_rate = self.filters["pressure"].update(press, dt)
+        for name, kf in self.filters.items():
+            if kf.initialised:
+                self.innovations[name].append(kf.innovation_z)
 
         return {
             "temp_c": temp_c,

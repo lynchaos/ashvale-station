@@ -154,6 +154,52 @@ class Store:
 
     # ------------------------------------------------------------- reads
 
+    def all_for_recompute(self) -> Dict[str, np.ndarray]:
+        """Every stored row's *raw* inputs, oldest first.
+
+        Only the columns a re-derivation actually needs. The raw sensor values
+        are never overwritten, which is precisely what makes recomputation
+        possible after a calibration changes k or the humidity offset.
+        """
+        cols = ["ts", "temp_raw", "cpu_temp", "hum", "press"]
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT {', '.join(cols)} FROM telemetry ORDER BY ts ASC").fetchall()
+        if not rows:
+            return {c: np.empty(0) for c in cols}
+        arr = np.array(rows, dtype=object)
+        out = {}
+        for i, c in enumerate(cols):
+            out[c] = np.array([np.nan if v is None else float(v) for v in arr[:, i]],
+                              dtype=float)
+        return out
+
+    def apply_recompute(self, ts: np.ndarray, updates: Dict[str, np.ndarray],
+                        chunk: int = 2000) -> int:
+        """Write recomputed derived columns back, in chunks.
+
+        Chunked because a year of tiered history is a six-figure row count and a
+        single statement would hold the whole parameter list in memory on a
+        512 MB board.
+        """
+        names = list(updates.keys())
+        sql = (f"UPDATE telemetry SET {', '.join(n + ' = ?' for n in names)} "
+               f"WHERE ts = ?")
+        n_written = 0
+        with self._conn() as conn:
+            for start in range(0, ts.size, chunk):
+                stop = min(start + chunk, ts.size)
+                batch = [
+                    tuple(
+                        [None if not np.isfinite(updates[n][i]) else float(updates[n][i])
+                         for n in names] + [float(ts[i])]
+                    )
+                    for i in range(start, stop)
+                ]
+                conn.executemany(sql, batch)
+                n_written += len(batch)
+        return n_written
+
     def window(self, hours: float, columns: Optional[Iterable[str]] = None) -> Dict[str, np.ndarray]:
         """Return the last `hours` of telemetry as column arrays, oldest first."""
         cols = list(columns) if columns else COLUMNS

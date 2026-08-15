@@ -25,11 +25,13 @@ import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import CONFIG
@@ -77,6 +79,14 @@ app = FastAPI(
                 "uncertainty, drift detection and verification.",
     lifespan=lifespan,
 )
+
+# Vendored browser libraries. The dashboard used to pull Tailwind, Chart.js,
+# hammer, the zoom plugin, KaTeX and two Google fonts from CDNs at runtime,
+# which meant the Pi needed internet to render its own UI. Serving them from
+# disk costs about 1.4 MB and removes that dependency entirely.
+_STATIC = Path(__file__).resolve().parent / "static"
+if _STATIC.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
 
 def _st() -> Station:
@@ -158,6 +168,7 @@ def telemetry() -> Dict:
         "cpu_offset": live.get("cpu_offset"),
         "compensator_k": live.get("compensator_k"),
         "hum_offset": live.get("hum_offset"),
+        "outdoor_c": live.get("outdoor_c"),
         "hum_psychrometric": live.get("hum_psychrometric"),
         "rates": {
             "temperature_c_per_h": live.get("temp_rate"),
@@ -361,6 +372,54 @@ def models() -> Dict:
     })
 
 
+def _innovation_histogram(st, bins: int = 21) -> Dict:
+    """Distribution of recent standardised Kalman innovations, per signal.
+
+    y/sqrt(S) should be standard normal when a filter is consistent. The single
+    NIS number says whether the spread is right on average; this says whether
+    the *shape* is right. Skew means systematic bias, excess kurtosis means the
+    filter is surprised more often than it admits.
+    """
+    out = {}
+    for name, buf in st.tracker.innovations.items():
+        z = np.array(buf, dtype=float)
+        z = z[np.isfinite(z)]
+        if z.size < 20:
+            out[name] = {"counts": [], "n": int(z.size)}
+            continue
+        clipped = np.clip(z, -4.0, 4.0)
+        counts, edges = np.histogram(clipped, bins=bins, range=(-4.0, 4.0))
+        out[name] = {
+            "counts": [int(c) for c in counts],
+            "edges": [round(float(e), 2) for e in edges],
+            "n": int(z.size),
+            "mean": round(float(np.mean(z)), 4),
+            "std": round(float(np.std(z)), 4),
+            "skew": round(float(np.mean(((z - z.mean()) / (z.std() or 1.0)) ** 3)), 3),
+            "kurtosis": round(float(np.mean(((z - z.mean()) / (z.std() or 1.0)) ** 4)), 3),
+        }
+    return out
+
+
+def _reliability_curve(st) -> Dict:
+    """Realised coverage against nominal, per horizon.
+
+    The scorecard reports one coverage number per head. This asks the sharper
+    question: is the *shape* right. Points below the diagonal mean the intervals
+    are lying, and by how much.
+    """
+    out = []
+    for (target, h), head in sorted(st.nowcast.heads.items()):
+        cov = head.conformal.empirical_coverage
+        if not np.isfinite(cov):
+            continue
+        out.append({"target": target, "horizon_s": h,
+                    "nominal": round(1.0 - head.conformal.alpha_target, 4),
+                    "realised": round(float(cov), 4),
+                    "n": int(head.n_scored)})
+    return {"points": out}
+
+
 @app.get("/api/nerd")
 def nerd() -> Dict:
     """Every internal number the estimator and the learners are carrying.
@@ -393,10 +452,22 @@ def nerd() -> Dict:
         m = head.model
         P = np.asarray(m.P, dtype=float)
         theta = np.asarray(m.theta, dtype=float)
+        # Condition number of P says whether the 33 directions are being excited
+        # evenly. A huge value means some directions carry almost no information
+        # and the fit there is effectively arbitrary, which is the quiet failure
+        # the trace cap only partly protects against. eigvalsh because P is
+        # symmetric by construction.
+        try:
+            ev = np.linalg.eigvalsh(P)
+            lo, hi = float(np.min(ev)), float(np.max(ev))
+            cond = float(hi / lo) if lo > 1e-12 else float("inf")
+        except np.linalg.LinAlgError:
+            cond = float("nan")
         heads.append({
             "target": target, "horizon_s": h,
             "n_updates": int(m.n_updates),
             "trace_p": float(np.trace(P)),
+            "cond_p": cond,
             "theta_norm": float(np.linalg.norm(theta)),
             "rmse_ewma": float(np.sqrt(max(m.ewma_sq_error, 0.0))),
             "lam": float(m.lam), "p_max": float(m.p_max),
@@ -459,6 +530,8 @@ def nerd() -> Dict:
             "logloss_ewma": st.precip.ewma_logloss,
         },
         "monitoring": monitoring,
+        "innovation": _innovation_histogram(st),
+        "reliability": _reliability_curve(st),
     })
 
 
@@ -515,12 +588,25 @@ def calibrate_humidity(body: HumidityCalibrationIn) -> Dict:
     return _clean(result)
 
 
+@app.post("/api/recompute")
+def recompute() -> Dict:
+    """Re-derive every compensated column in the history from the raw values.
+
+    Run after a calibration to remove the step it leaves behind. Safe to repeat:
+    it always starts from the untouched raw columns, never from a previous
+    result, so it cannot compound.
+    """
+    result = _st().recompute_history()
+    return _clean(result)
+
+
 @app.get("/api/status")
 def status() -> Dict:
     st = _st()
     return _clean({
         **st.status(),
         "display_frame": display.frame_name if display else None,
+        "outdoor_probe": (st.probe.status() if st.probe is not None else None),
         "events": st.store.recent_events(15),
     })
 

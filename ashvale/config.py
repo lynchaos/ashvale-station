@@ -66,6 +66,11 @@ class SensorConfig:
     # HIGH and this correction would push it higher still. The error is an
     # additive element bias, not a thermal gradient. Leave off unless your own
     # reference says otherwise.
+    # Optional DS18B20 on the 1-Wire bus, outside the window. When present its
+    # reading is logged as outdoor_c and surfaced in the API. It does not feed
+    # the forecasting features yet: that needs history to train against.
+    outdoor_probe: bool = True
+    outdoor_probe_period_s: float = 20.0
     hum_psychrometric: bool = False
     hum_offset: float = 0.0
     hum_offset_min: float = -35.0
