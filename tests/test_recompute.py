@@ -83,11 +83,20 @@ def test_recompute_is_idempotent(client):
 
 
 def test_recompute_preserves_row_count(client):
+    """Recompute must never drop a row.
+
+    Asserted as "no fewer than before" rather than equality: the sample loop is
+    live under TestClient and legitimately inserts rows mid-test. Equality here
+    was flaky for that reason, and a flaky test is worse than no test because it
+    trains you to ignore red.
+    """
     if _rows() == 0:
         pytest.skip("no history in the database")
     before = _rows()
-    client.post("/api/recompute")
-    assert _rows() == before
+    result = client.post("/api/recompute").json()
+    after = _rows()
+    assert after >= before, f"rows lost: {before} -> {after}"
+    assert result["rows"] >= before, "recompute touched fewer rows than existed"
 
 
 def test_recompute_tracks_the_current_offset(client):
