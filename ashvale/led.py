@@ -136,9 +136,13 @@ class Canvas:
         """
         if alpha <= 0.0:
             return
-        x0, y0 = math.floor(x), math.floor(y)
+        x0, y0 = int(math.floor(x)), int(math.floor(y))
         fx, fy = x - x0, y - y0
-        col = np.asarray(colour, dtype=float) * alpha
+        # Scalar component writes, not a 3-vector slice add. numpy's per-call
+        # overhead dominates at this size, and the splat is the hot path for
+        # every particle and every glyph stroke.
+        cr, cg, cb = colour[0] * alpha, colour[1] * alpha, colour[2] * alpha
+        buf = self.buf
         for dy in (0, 1):
             yy = y0 + dy
             if yy < 0 or yy >= N:
@@ -151,9 +155,12 @@ class Canvas:
                 if xx < 0 or xx >= N:
                     continue
                 wx = fx if dx else (1.0 - fx)
-                if wx <= 0.0:
+                w = wx * wy
+                if w <= 0.0:
                     continue
-                self.buf[yy, xx] += col * (wx * wy)
+                buf[yy, xx, 0] += cr * w
+                buf[yy, xx, 1] += cg * w
+                buf[yy, xx, 2] += cb * w
 
     def column(self, x: float, height: float, colour, alpha: float = 1.0) -> None:
         """A bar with a soft, fractional top edge rather than a stepped one."""
@@ -480,6 +487,217 @@ class Alert(Scene):
         cv.wash(edge, colour)
 
 
+# --------------------------------------------------------------------------
+# Weather glyphs. Hand-drawn at 8x8 rather than downsampled from artwork.
+#
+# Three references were measured first: at 8x8 a 270x480 sun is a 2025:1 area
+# reduction and its rays disappear, a 400x400 umbrella loses its canopy and
+# handle, and a 638x638 snowflake averages into the background. Downsampled they
+# move 0.0037, 0.0175 and 0.0027 per frame, against 0.0177 for the aurora
+# already here. Copying frames would have been a downgrade. What does survive
+# the trip is the palette and the subject, so those are what these borrow.
+# --------------------------------------------------------------------------
+
+class SunBurst(Scene):
+    """Rayed sun. Shown when the sun is actually up and the sky is clear.
+
+    Eight rays rotate slowly and breathe in and out of the disc. Ray length
+    follows the real solar elevation, so a low winter sun is a tight bright core
+    and a high summer one throws long arms to the corners. Cloud cover softens
+    the rays and greys the sky, so a hazy day genuinely looks hazy.
+
+    Palette taken from the reference: saturated yellow core, orange tips, on a
+    pale blue sky.
+    """
+
+    name = "sun"
+    duration = 13.0
+
+    def render(self, cv: Canvas, t: float, s: Dict) -> None:
+        elev = s.get("solar_elevation", 30.0)
+        cloud = float(np.clip(s.get("cloud", 0.3), 0.0, 1.0))
+        high = _smoothstep(0.0, 45.0, elev)
+
+        sky = _mix((0.36, 0.55, 0.78), (0.60, 0.80, 1.00), 1.0 - cloud)
+        cv.buf += np.asarray(sky) * (0.10 + 0.13 * high)
+
+        core = (1.00, 0.80, 0.00)
+        tip = (1.00, 0.45, 0.05)
+
+        # Disc: a soft radial falloff, not a stamped circle.
+        disc = np.exp(-(RADIUS ** 2) / (1.5 + 0.5 * high))
+        cv.wash(disc * 0.95, core)
+
+        breathe = 0.5 + 0.5 * math.sin(t * 1.1)
+        reach = 1.6 + 1.9 * high + 0.45 * breathe
+        spin = t * 0.30
+
+        # Eight-fold symmetry is one cosine, so the rays are a single field
+        # instead of fifty-six sub-pixel splats. Same picture, a third of the
+        # cost, and the angular falloff is smoother than point sampling was.
+        ang = np.arctan2(Y - _CY, X - _CX)
+        lobes = (np.cos(8.0 * (ang - spin)) * 0.5 + 0.5) ** 3.0
+        shell = np.exp(-((RADIUS - (1.1 + reach * 0.55)) ** 2) / (1.1 + 0.6 * reach))
+        beam = lobes * shell * (1.0 - 0.45 * cloud)
+        cv.wash(beam * 0.80, _mix(core, tip, 0.55))
+
+        # Corona, so the disc sits in light rather than on top of it.
+        cv.wash(np.exp(-(RADIUS ** 2) / 9.0) * 0.22 * (1.0 - 0.5 * cloud), core)
+
+
+class Umbrella(Scene):
+    """Umbrella under rain. Shown when rain is likely and it is too warm to snow.
+
+    The canopy bobs on a slow sine, and drops that reach it bounce off sideways
+    instead of passing through, which is the detail that sells it as an object
+    rather than a shape. Rain density follows the forecast probability, so a 30%
+    afternoon drizzles and an 80% one hammers.
+
+    Pink canopy and blue rain, from the reference.
+    """
+
+    name = "umbrella"
+    duration = 13.0
+
+    def __init__(self) -> None:
+        self.drops: List[List[float]] = []
+        self.splash: List[List[float]] = []
+
+    def render(self, cv: Canvas, t: float, s: Dict) -> None:
+        p = float(np.clip(s.get("rain_prob", 0.4), 0.0, 1.0))
+        fps = max(float(s.get("_fps", FPS)), 1.0)
+
+        cv.buf += np.asarray((0.02, 0.10, 0.26)) * 0.55      # wet blue ground
+        cv.fade(1.0)
+
+        bob = 0.30 * math.sin(t * 1.25)
+        cy = 3.1 + bob
+        canopy = (1.00, 0.60, 0.80)
+        rib = (0.86, 0.36, 0.62)
+
+        # Canopy: a dome traced as an arc so its edge stays smooth at this size.
+        # The arc is about 10 px long, so 11 samples is roughly one per pixel.
+        # Seventeen overlapped 1.7 deep and blew the canopy white; dropping the
+        # alpha instead just made it muddy. Fix the sampling, not the brightness.
+        for i in range(11):
+            a = math.pi + (i / 10.0) * math.pi          # pi .. 2pi, the top half
+            x = _CX + 3.05 * math.cos(a)
+            y = cy + 1.85 * math.sin(a)
+            # Low alpha because seventeen arc samples overlap heavily; at 0.95
+            # the canopy saturated to white and lost its colour entirely.
+            cv.plot(x, y, canopy, 0.78)
+            cv.plot(x, y + 0.62, rib, 0.26)             # underside shadow
+        cv.plot(_CX, cy - 1.62, canopy, 0.60)           # finial
+
+        # Handle, with the hook at the bottom.
+        for k in range(5):
+            cv.plot(_CX, cy + 0.7 + k * 0.55, (0.85, 0.45, 0.32), 0.55)
+        cv.plot(_CX - 0.55, cy + 3.15, (0.85, 0.45, 0.32), 0.45)
+
+        want = int(round(3 + 11 * p))
+        while len(self.drops) < want:
+            self.drops.append([np.random.uniform(0, N), np.random.uniform(-N, 0)])
+        while len(self.drops) > want:
+            self.drops.pop()
+
+        speed = 4.4 + 3.2 * p
+        for d in self.drops:
+            d[1] += speed / fps
+            dx = d[0] - _CX
+            # Inside the canopy's span and level with it: bounce, do not pass.
+            if abs(dx) < 3.05 and cy - 1.9 <= d[1] <= cy + 0.2:
+                self.splash.append([d[0], d[1], math.copysign(2.6, dx or 1.0), 0.0])
+                d[0] = np.random.uniform(0, N)
+                d[1] = np.random.uniform(-2.5, -0.3)
+                continue
+            if d[1] > N + 1:
+                d[0] = np.random.uniform(0, N)
+                d[1] = np.random.uniform(-2.5, -0.3)
+            cv.plot(d[0], d[1], (0.00, 0.60, 1.00), 0.8)
+
+        alive = []
+        for sp in self.splash:
+            sp[3] += 1.0 / fps
+            if sp[3] > 0.6:
+                continue
+            x = sp[0] + sp[2] * sp[3] * 1.6
+            y = sp[1] + 5.0 * sp[3] * sp[3]
+            if 0 <= y < N:
+                cv.plot(x, y, (0.55, 0.85, 1.00), 0.6 * (1.0 - sp[3] / 0.6))
+            alive.append(sp)
+        self.splash = alive[-24:]
+
+
+class Snowflake(Scene):
+    """A six-arm flake, turning. Shown when it is cold enough to snow.
+
+    Six arms with branches, rotated as a whole. Sub-pixel plotting is what makes
+    a rotating star possible at this size: without it the arms would jump
+    between pixels and the whole thing would strobe. The flake breathes, drifts
+    on a slow lissajous, and smaller flakes fall past it.
+
+    Deep blue night and white, from the reference.
+    """
+
+    name = "snowflake"
+    duration = 14.0
+
+    def __init__(self) -> None:
+        self.motes: List[List[float]] = []
+
+    def render(self, cv: Canvas, t: float, s: Dict) -> None:
+        p = float(np.clip(s.get("rain_prob", 0.5), 0.0, 1.0))
+        fps = max(float(s.get("_fps", FPS)), 1.0)
+
+        for row in range(N):
+            k = row / (N - 1.0)
+            # Kept dark on purpose: a bright ground and a white flake fight,
+            # and the flake loses.
+            cv.buf[row, :] += np.asarray(_mix((0.00, 0.00, 0.13),
+                                              (0.04, 0.05, 0.22), k))
+
+        want = int(round(2 + 7 * p))
+        while len(self.motes) < want:
+            self.motes.append([np.random.uniform(0, N), np.random.uniform(-N, 0)])
+        while len(self.motes) > want:
+            self.motes.pop()
+        for m in self.motes:
+            m[1] += 1.05 / fps
+            if m[1] > N + 1:
+                m[0] = np.random.uniform(0, N)
+                m[1] = np.random.uniform(-2.0, -0.3)
+            x = (m[0] + 0.8 * math.sin(t * 0.7 + m[0] * 2.1)) % N
+            tw = 0.55 + 0.45 * math.sin(t * 2.6 + m[0] * 4.0)
+            cv.plot(x, m[1], (0.75, 0.85, 1.00), 0.34 * tw)
+
+        spin = t * 0.42
+        cx = _CX + 0.42 * math.sin(t * 0.31)
+        cy = _CY + 0.34 * math.sin(t * 0.23 + 1.1)
+        breathe = 0.86 + 0.14 * math.sin(t * 1.05)
+        white = (0.92, 0.96, 1.00)
+
+        cv.wash(np.exp(-(((X - cx) ** 2 + (Y - cy) ** 2)) / 5.5) * 0.11,
+                (0.30, 0.50, 0.95))
+
+        # Six arms sixty degrees apart is only about three pixels of separation
+        # at this radius, so they have to be thin and start clear of the hub.
+        # Drawn thick and bright they simply fuse into a white blob, which is
+        # the exact failure the downsampled reference had.
+        span = 3.35 * breathe
+        for i in range(6):
+            a = spin + i * (math.pi / 3.0)
+            ca, sa = math.cos(a), math.sin(a)
+            for k in range(4):
+                d = 1.25 + (k / 3.0) * (span - 1.25)
+                cv.plot(cx + ca * d, cy + sa * d, white, 0.62 - 0.06 * k)
+            # One pair of branches. Two pairs closed the gaps and it blobbed.
+            bx, by = cx + ca * span * 0.62, cy + sa * span * 0.62
+            for sgn in (-1, 1):
+                b = a + sgn * 1.05
+                cv.plot(bx + math.cos(b) * 0.78, by + math.sin(b) * 0.78, white, 0.34)
+        cv.plot(cx, cy, white, 0.62)
+
+
 class LedDisplay:
     """Renders scenes at a steady frame rate and dissolves between them.
 
@@ -500,9 +718,16 @@ class LedDisplay:
         self._task = None
         self.frame_name = "idle"
 
+        # Two tracks. The glyph is chosen by what the weather is doing; the
+        # ambient scenes rotate underneath it to carry the numbers.
+        self.glyphs: Dict[str, Scene] = {
+            "sun": SunBurst(), "umbrella": Umbrella(), "snowflake": Snowflake(),
+        }
         self.scenes: List[Scene] = [Aurora(), SolarSky(), Precipitation(),
                                     ForecastRibbon(), Barometer()]
         self.alert = Alert()
+        self._glyph: Optional[str] = None
+        self._show_glyph = False
         self._idx = 0
         self._scene_started = 0.0
         self._prev: Optional[Scene] = None
@@ -556,6 +781,30 @@ class LedDisplay:
 
     # ------------------------------------------------------------ loop
 
+    @staticmethod
+    def _pick_glyph(s: Dict) -> Optional[str]:
+        """Which weather is this, from measurement and forecast only.
+
+        Deliberately hysteresis-free thresholds on quantities that are already
+        smoothed upstream: rain probability comes from the Zambretti prior blended
+        with the online learner, temperature is the Kalman level, and the solar
+        elevation is computed not guessed. So the glyph changes when the weather
+        changes, not when a sensor twitches.
+        """
+        rain = s.get("rain_prob", 0.0)
+        temp = s.get("temp", 10.0)
+        elev = s.get("solar_elevation", -20.0)
+        cloud = s.get("cloud", 0.5)
+        cond = s.get("condition", "changeable")
+
+        if temp <= 1.5 and (rain >= 0.30 or cond in ("unsettled", "rain", "wet", "stormy")):
+            return "snowflake"
+        if rain >= 0.45 or cond in ("rain", "wet", "stormy"):
+            return "umbrella"
+        if elev > 3.0 and cloud < 0.55 and rain < 0.30:
+            return "sun"
+        return None
+
     def _advance(self, now: float, s: Dict) -> None:
         alerting = s["health"] != "ok" or s["retrain"]
         if alerting != self._alerting:
@@ -566,15 +815,41 @@ class LedDisplay:
             return
         if alerting:
             return
-        cur = self.scenes[self._idx]
-        if now - self._scene_started >= cur.duration:
-            self._prev = cur
+
+        # A change in the weather itself preempts whatever is on screen. This is
+        # the point: the panel dissolves because the data moved, not because a
+        # timer expired.
+        glyph = self._pick_glyph(s)
+        if glyph != self._glyph:
+            self._prev = self._current()
+            self._glyph = glyph
+            self._show_glyph = glyph is not None
             self._fade_started = now
-            self._idx = (self._idx + 1) % len(self.scenes)
             self._scene_started = now
+            return
+
+        cur = self._current()
+        if now - self._scene_started < cur.duration:
+            return
+
+        self._prev = cur
+        self._fade_started = now
+        self._scene_started = now
+        if self._show_glyph:
+            # Hand back to the informational scenes for one turn.
+            self._show_glyph = False
+            self._idx = (self._idx + 1) % len(self.scenes)
+        elif self._glyph is not None:
+            self._show_glyph = True
+        else:
+            self._idx = (self._idx + 1) % len(self.scenes)
 
     def _current(self) -> Scene:
-        return self.alert if self._alerting else self.scenes[self._idx]
+        if self._alerting:
+            return self.alert
+        if self._show_glyph and self._glyph in self.glyphs:
+            return self.glyphs[self._glyph]
+        return self.scenes[self._idx]
 
     async def _run(self) -> None:
         period = 1.0 / self.fps
