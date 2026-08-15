@@ -102,7 +102,14 @@ def _mix(a, b, t: float):
 
 
 def _smoothstep(edge0: float, edge1: float, x: float) -> float:
-    if edge1 <= edge0:
+    """Hermite ramp between two edges. Handles a descending range.
+
+    The descending case is not decoration: writing _smoothstep(2, -8, elev) to
+    mean "1 when the sun is well down" silently returned the exact inverse when
+    this fell through to the degenerate branch, and the panel drew a moon at
+    midday and a sun at midnight.
+    """
+    if edge0 == edge1:
         return 0.0 if x < edge0 else 1.0
     t = min(max((x - edge0) / (edge1 - edge0), 0.0), 1.0)
     return t * t * (3.0 - 2.0 * t)
@@ -518,18 +525,25 @@ class SunBurst(Scene):
         cloud = float(np.clip(s.get("cloud", 0.3), 0.0, 1.0))
         high = _smoothstep(0.0, 45.0, elev)
 
-        sky = _mix((0.36, 0.55, 0.78), (0.60, 0.80, 1.00), 1.0 - cloud)
-        cv.buf += np.asarray(sky) * (0.10 + 0.13 * high)
+        # After dark the same geometry becomes a moon: cool palette, rays pulled
+        # in to a halo. Without this the fair-weather symbol simply vanishes for
+        # half of every day, which is how the glyphs went missing in the first
+        # place.
+        night = _smoothstep(2.0, -8.0, elev)
 
-        core = (1.00, 0.80, 0.00)
-        tip = (1.00, 0.45, 0.05)
+        sky = _mix((0.36, 0.55, 0.78), (0.60, 0.80, 1.00), 1.0 - cloud)
+        sky = _mix(sky, (0.03, 0.04, 0.16), night)
+        cv.buf += np.asarray(sky) * (0.10 + 0.13 * high + 0.06 * night)
+
+        core = _mix((1.00, 0.80, 0.00), (0.80, 0.86, 1.00), night)
+        tip = _mix((1.00, 0.45, 0.05), (0.45, 0.60, 0.95), night)
 
         # Disc: a soft radial falloff, not a stamped circle.
         disc = np.exp(-(RADIUS ** 2) / (1.5 + 0.5 * high))
         cv.wash(disc * 0.95, core)
 
         breathe = 0.5 + 0.5 * math.sin(t * 1.1)
-        reach = 1.6 + 1.9 * high + 0.45 * breathe
+        reach = (1.6 + 1.9 * high + 0.45 * breathe) * (1.0 - 0.55 * night)
         spin = t * 0.30
 
         # Eight-fold symmetry is one cosine, so the rays are a single field
@@ -726,8 +740,8 @@ class LedDisplay:
         self.scenes: List[Scene] = [Aurora(), SolarSky(), Precipitation(),
                                     ForecastRibbon(), Barometer()]
         self.alert = Alert()
-        self._glyph: Optional[str] = None
-        self._show_glyph = False
+        self._glyph: str = "sun"
+        self._show_glyph = True
         self._idx = 0
         self._scene_started = 0.0
         self._prev: Optional[Scene] = None
@@ -782,28 +796,30 @@ class LedDisplay:
     # ------------------------------------------------------------ loop
 
     @staticmethod
-    def _pick_glyph(s: Dict) -> Optional[str]:
+    def _pick_glyph(s: Dict) -> str:
         """Which weather is this, from measurement and forecast only.
 
-        Deliberately hysteresis-free thresholds on quantities that are already
-        smoothed upstream: rain probability comes from the Zambretti prior blended
-        with the online learner, temperature is the Kalman level, and the solar
-        elevation is computed not guessed. So the glyph changes when the weather
-        changes, not when a sensor twitches.
+        Always returns a glyph. The first version gated each one behind narrow
+        conditions and returned None otherwise, which on a warm dry night meant
+        none of them ever qualified and the panel silently fell back to the
+        ambient scenes. A forecast symbol is not an exception, it is the default,
+        so this reads like a weather app: cold wins, then wet, then fair.
+
+        The thresholds sit on quantities that are already smoothed upstream. Rain
+        probability is the Zambretti prior blended with the online learner and
+        temperature is the Kalman level, so the glyph changes when the weather
+        changes rather than when a sensor twitches.
         """
         rain = s.get("rain_prob", 0.0)
         temp = s.get("temp", 10.0)
-        elev = s.get("solar_elevation", -20.0)
-        cloud = s.get("cloud", 0.5)
         cond = s.get("condition", "changeable")
+        wet = cond in ("rain", "wet", "stormy")
 
-        if temp <= 1.5 and (rain >= 0.30 or cond in ("unsettled", "rain", "wet", "stormy")):
-            return "snowflake"
-        if rain >= 0.45 or cond in ("rain", "wet", "stormy"):
+        if temp <= 1.5:
+            return "snowflake" if (rain >= 0.20 or wet or cond == "unsettled") else "sun"
+        if rain >= 0.30 or wet:
             return "umbrella"
-        if elev > 3.0 and cloud < 0.55 and rain < 0.30:
-            return "sun"
-        return None
+        return "sun"
 
     def _advance(self, now: float, s: Dict) -> None:
         alerting = s["health"] != "ok" or s["retrain"]
@@ -823,7 +839,7 @@ class LedDisplay:
         if glyph != self._glyph:
             self._prev = self._current()
             self._glyph = glyph
-            self._show_glyph = glyph is not None
+            self._show_glyph = True
             self._fade_started = now
             self._scene_started = now
             return
@@ -839,10 +855,8 @@ class LedDisplay:
             # Hand back to the informational scenes for one turn.
             self._show_glyph = False
             self._idx = (self._idx + 1) % len(self.scenes)
-        elif self._glyph is not None:
-            self._show_glyph = True
         else:
-            self._idx = (self._idx + 1) % len(self.scenes)
+            self._show_glyph = True
 
     def _current(self) -> Scene:
         if self._alerting:
