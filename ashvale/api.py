@@ -128,6 +128,12 @@ class CalibrationIn(BaseModel):
                                            "covariance, returning to the configured prior")
 
 
+class EnvironmentIn(BaseModel):
+    environment: Optional[str] = Field(None, description="indoor | sheltered | outdoor")
+    enclosure: Optional[str] = Field(None, description="closed | ventilated | open")
+    note: str = Field("", description="what changed, for the log")
+
+
 class HumidityCalibrationIn(BaseModel):
     reference_pct: Optional[float] = Field(None, ge=0, le=100,
                                            description="Trusted relative humidity in %")
@@ -600,6 +606,24 @@ def recompute() -> Dict:
     return _clean(result)
 
 
+@app.post("/api/environment")
+def environment(body: EnvironmentIn) -> Dict:
+    """Tell the station its surroundings changed, and have it react.
+
+    Marks a discontinuity and queues a retrain, because the learners' 55 hour
+    memory would otherwise keep predicting the old regime for two days.
+    """
+    valid_env = {"indoor", "sheltered", "outdoor"}
+    valid_enc = {"closed", "ventilated", "open"}
+    if body.environment and body.environment not in valid_env:
+        raise HTTPException(422, f"environment must be one of {sorted(valid_env)}")
+    if body.enclosure and body.enclosure not in valid_enc:
+        raise HTTPException(422, f"enclosure must be one of {sorted(valid_enc)}")
+    if not body.environment and not body.enclosure:
+        raise HTTPException(422, "provide environment, enclosure, or both")
+    return _clean(_st().set_environment(body.environment, body.enclosure, body.note))
+
+
 @app.get("/api/status")
 def status() -> Dict:
     st = _st()
@@ -607,6 +631,8 @@ def status() -> Dict:
         **st.status(),
         "display_frame": display.frame_name if display else None,
         "outdoor_probe": (st.probe.status() if st.probe is not None else None),
+        "environment": CONFIG.site.environment,
+        "enclosure": CONFIG.site.enclosure,
         "events": st.store.recent_events(15),
     })
 

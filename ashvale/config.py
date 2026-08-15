@@ -41,7 +41,22 @@ class SiteConfig:
     longitude: float = 0.1218
     altitude_m: float = 15.0       # for sea-level pressure reduction
     timezone: str = "Europe/London"
-    indoors: bool = True           # honest flag, changes how forecasts are worded
+    indoors: bool = True
+    # Where the sensor actually lives, and what has changed around it.
+    #
+    # This matters more than it looks. Indoors, temperature and humidity are
+    # governed by the building, not the sky: the diurnal swing is damped and
+    # lagged, and the solar features the model is given correlate weakly with
+    # what the thermometer does. Pressure is the exception, which is why the
+    # precipitation model runs on tendency rather than indoor humidity.
+    #
+    # "enclosure" is the part worth changing at runtime. Closing a door or
+    # opening a window is a step change in how strongly the sensor is coupled to
+    # outside, and the learners carry roughly 55 hours of memory, so they will
+    # keep predicting the old regime for two days unless told. POST
+    # /api/environment marks the moment and asks for a retrain.
+    environment: str = "indoor"        # indoor | sheltered | outdoor
+    enclosure: str = "closed"          # closed | ventilated | open           # honest flag, changes how forecasts are worded
 
 
 @dataclass

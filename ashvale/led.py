@@ -115,6 +115,64 @@ def _smoothstep(edge0: float, edge1: float, x: float) -> float:
     return t * t * (3.0 - 2.0 * t)
 
 
+# A 3x5 glyph set. Three pixels wide is the narrowest a digit can be and stay
+# legible, which on an 8x8 leaves room for two digits and a unit mark, or a
+# smoothly scrolling strip of any length.
+_FONT = {
+    "0": ("111", "101", "101", "101", "111"),
+    "1": ("010", "110", "010", "010", "111"),
+    "2": ("111", "001", "111", "100", "111"),
+    "3": ("111", "001", "111", "001", "111"),
+    "4": ("101", "101", "111", "001", "001"),
+    "5": ("111", "100", "111", "001", "111"),
+    "6": ("111", "100", "111", "101", "111"),
+    "7": ("111", "001", "010", "010", "010"),
+    "8": ("111", "101", "111", "101", "111"),
+    "9": ("111", "101", "111", "001", "111"),
+    "-": ("000", "000", "111", "000", "000"),
+    "+": ("000", "010", "111", "010", "000"),
+    ".": ("000", "000", "000", "000", "010"),
+    "%": ("101", "001", "010", "100", "101"),
+    "C": ("111", "100", "100", "100", "111"),
+    "h": ("100", "100", "110", "101", "101"),
+    "P": ("111", "101", "111", "100", "100"),
+    "a": ("000", "110", "011", "101", "111"),
+    " ": ("000", "000", "000", "000", "000"),
+}
+
+
+def _text_width(text: str) -> int:
+    return sum(4 for _ in text)
+
+
+def _draw_text(cv: Canvas, text: str, x: float, y: float, colour,
+               alpha: float = 1.0) -> None:
+    """Whole-pixel text, deliberately.
+
+    Everything else on this panel is sub-pixel rendered, and for particles and
+    discs that is what makes it look good. For a 3 px wide glyph it is ruinous:
+    splitting each stroke across two columns halves its peak brightness and
+    smears the letterform until it is unreadable. Text snaps to the grid and
+    scrolls in whole steps. Crisp beats smooth when the thing has to be read.
+    """
+    x = round(x)
+    y = round(y)
+    for ch in text:
+        g = _FONT.get(ch)
+        if g is not None and -4 < x < N + 1:
+            for r, row in enumerate(g):
+                yy = y + r
+                if yy < 0 or yy >= N:
+                    continue
+                for c, on in enumerate(row):
+                    xx = x + c
+                    if on == "1" and 0 <= xx < N:
+                        cv.buf[yy, xx, 0] += colour[0] * alpha
+                        cv.buf[yy, xx, 1] += colour[1] * alpha
+                        cv.buf[yy, xx, 2] += colour[2] * alpha
+        x += 4
+
+
 class Canvas:
     """An 8x8 linear-light RGB buffer with sub-pixel drawing."""
 
@@ -712,6 +770,64 @@ class Snowflake(Scene):
         cv.plot(cx, cy, white, 0.62)
 
 
+class Readout(Scene):
+    """The actual numbers, scrolling between the animations.
+
+    Everything else on this panel is an impression: a hue, a drift direction, a
+    ray length. This is the one that tells you it is 24.2 degrees. The strip runs
+    measurement first, then the three hour forecast with its sign, each segment
+    in its channel's colour so you can tell temperature from humidity without
+    reading the unit.
+
+    Scrolls at a fractional pixel offset, so at 8 pixels tall the glyphs glide
+    rather than stepping, which is the difference between readable and a
+    flickering mess.
+    """
+
+    name = "readout"
+    duration = 15.0
+
+    AMBER = (1.00, 0.62, 0.06)
+    CYAN = (0.10, 0.78, 0.95)
+    VIOLET = (0.66, 0.52, 1.00)
+    GREEN = (0.30, 0.95, 0.55)
+    ROSE = (1.00, 0.35, 0.45)
+
+    def _segments(self, s: Dict) -> List[Tuple[str, Tuple[float, float, float]]]:
+        t = s.get("temp")
+        rh = s.get("humidity")
+        slp = s.get("press")
+        segs: List[Tuple[str, Tuple[float, float, float]]] = []
+        if t is not None:
+            segs.append((f"{t:.1f}C", self.AMBER))
+        if rh is not None:
+            segs.append((f"{rh:.0f}%", self.CYAN))
+        if slp is not None:
+            segs.append((f"{slp:.0f}Pa", self.VIOLET))
+        fc = s.get("forecast") or []
+        if len(fc) >= 3:
+            d = float(fc[2].get("delta", 0.0))          # the three hour head
+            segs.append((f"{d:+.1f}", self.GREEN if d >= 0 else self.ROSE))
+        return segs or [("--", self.AMBER)]
+
+    def render(self, cv: Canvas, t: float, s: Dict) -> None:
+        segs = self._segments(s)
+        gap = 3.0
+        widths = [_text_width(txt) + gap for txt, _ in segs]
+        total = sum(widths)
+
+        # A faint moving ground so the text is not floating in black.
+        cv.wash(np.exp(-((Y - 3.5) ** 2) / 14.0) * 0.05, (0.20, 0.24, 0.40))
+
+        x = N - (t * 5.0) % total
+        for _ in range(2):                              # wrap for a seamless loop
+            cursor = x
+            for (txt, colour), w in zip(segs, widths):
+                _draw_text(cv, txt, cursor, 1.5, colour, 1.0)
+                cursor += w
+            x += total
+
+
 class LedDisplay:
     """Renders scenes at a steady frame rate and dissolves between them.
 
@@ -737,8 +853,9 @@ class LedDisplay:
         self.glyphs: Dict[str, Scene] = {
             "sun": SunBurst(), "umbrella": Umbrella(), "snowflake": Snowflake(),
         }
-        self.scenes: List[Scene] = [Aurora(), SolarSky(), Precipitation(),
-                                    ForecastRibbon(), Barometer()]
+        self.scenes: List[Scene] = [Readout(), Aurora(), SolarSky(),
+                                    Precipitation(), ForecastRibbon(),
+                                    Barometer()]
         self.alert = Alert()
         self._glyph: str = "sun"
         self._show_glyph = True
@@ -771,6 +888,7 @@ class LedDisplay:
             "temp": float(live.get("temp_smooth") or live.get("temp_c") or 15.0),
             "humidity": float(live.get("hum_smooth") or 60.0),
             "press_rate": float(live.get("press_rate") or 0.0),
+            "press": live.get("press_slp"),
             "solar_elevation": float(live.get("solar_elevation") or -20.0),
             "solar_azimuth": float(live.get("solar_azimuth") or 180.0),
             "cloud": float(live.get("cloud_index") or 0.4),

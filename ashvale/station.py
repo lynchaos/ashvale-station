@@ -343,13 +343,25 @@ class Station:
         # old contaminated state cannot leak into the re-derivation.
         kt = KalmanCV(self.cfg.sensor.kalman_q_temp, self.cfg.sensor.kalman_r_temp)
         kh = KalmanCV(self.cfg.sensor.kalman_q_hum, self.cfg.sensor.kalman_r_hum)
+        q_temp = float(self.cfg.sensor.kalman_q_temp)
+        q_hum = float(self.cfg.sensor.kalman_q_hum)
+        live_dt = float(self.cfg.sensor.sample_period_s)
         temp_s = np.empty(n)
         temp_r = np.empty(n)
         hum_s = np.empty(n)
         prev = None
         for i in range(n):
-            dt = 1.0 if prev is None else max(ts[i] - prev, 1e-3)
+            dt = live_dt if prev is None else max(ts[i] - prev, 1e-3)
             prev = ts[i]
+            # q is tuned for the live 2 s cadence and Q scales with dt^3, so
+            # replaying stored rows at their own spacing (30 s raw, 300 s and
+            # 3600 s once tiered) inflates the process noise by up to seven
+            # orders of magnitude. The filter then abandons smoothing and tracks
+            # measurement noise, which showed up as indoor rates of +/-20 C/h.
+            # Rescaled per step because tiers mean the cadence is not constant.
+            scale = (live_dt / dt) ** 3
+            kt.q = q_temp * scale
+            kh.q = q_hum * scale
             lvl, rate = kt.update(temp_c[i], dt)
             temp_s[i], temp_r[i] = lvl, rate * 3600.0
             hum_s[i], _ = kh.update(hum_c[i], dt)
@@ -369,6 +381,43 @@ class Station:
             f"rh offset={hcomp.offset:+.2f}% in {secs:.1f}s")
         return {"rows": written, "seconds": round(secs, 2),
                 "k": comp.k, "hum_offset": hcomp.offset}
+
+    def set_environment(self, environment: Optional[str] = None,
+                        enclosure: Optional[str] = None,
+                        note: str = "") -> Dict:
+        """Record a change in the sensor's surroundings and act on it.
+
+        Not cosmetic. A door closing changes how strongly the sensor couples to
+        outside, which is a regime change in the very process the heads are
+        fitting. Their forgetting factor is 0.9985 on a five minute grid, about
+        55 hours of memory, so left alone they keep predicting the old room for
+        two days. Page-Hinkley would eventually notice from forecast error, but
+        it needs matured forecasts to do it, which at the longer horizons is
+        exactly the two days you were trying to skip.
+
+        So this does three things: writes a discontinuity marker so the record
+        shows where the regime changed, requests a retrain so the fit is redone
+        against recent data rather than drifting, and stores the new state for
+        the API and the Methods page to report honestly.
+        """
+        changed = []
+        if environment and environment != self.cfg.site.environment:
+            changed.append(f"environment {self.cfg.site.environment} -> {environment}")
+            self.cfg.site.environment = environment
+        if enclosure and enclosure != self.cfg.site.enclosure:
+            changed.append(f"enclosure {self.cfg.site.enclosure} -> {enclosure}")
+            self.cfg.site.enclosure = enclosure
+        if not changed:
+            return {"changed": False, "environment": self.cfg.site.environment,
+                    "enclosure": self.cfg.site.enclosure}
+
+        detail = "; ".join(changed) + (f" ({note})" if note else "")
+        self.store.log_event("environment", "info", detail)
+        self.store.log_event("discontinuity", "warn", detail)
+        self.monitor.retrain_requested = True
+        return {"changed": True, "environment": self.cfg.site.environment,
+                "enclosure": self.cfg.site.enclosure,
+                "retrain_requested": True, "detail": detail}
 
     def reset_calibration(self) -> Dict:
         """Return the self-heating coefficient to its configured prior.
