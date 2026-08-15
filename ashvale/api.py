@@ -108,6 +108,13 @@ class CalibrationIn(BaseModel):
                                            "covariance, returning to the configured prior")
 
 
+class HumidityCalibrationIn(BaseModel):
+    reference_pct: Optional[float] = Field(None, ge=0, le=100,
+                                           description="Trusted relative humidity in %")
+    reset: bool = Field(False, description="Discard the learned offset, returning to "
+                                           "the configured prior")
+
+
 # ------------------------------------------------------------ endpoints
 
 @app.get("/api/telemetry")
@@ -140,6 +147,8 @@ def telemetry() -> Dict:
         "cpu_temp": live.get("cpu_temp"),
         "cpu_offset": live.get("cpu_offset"),
         "compensator_k": live.get("compensator_k"),
+        "hum_offset": live.get("hum_offset"),
+        "hum_psychrometric": live.get("hum_psychrometric"),
         "rates": {
             "temperature_c_per_h": live.get("temp_rate"),
             "humidity_pct_per_h": live.get("hum_rate"),
@@ -377,6 +386,19 @@ def calibrate(body: CalibrationIn) -> Dict:
     if body.reference_c is None:
         raise HTTPException(422, "provide reference_c, or reset=true")
     result = st.calibrate_temperature(body.reference_c)
+    if "error" in result:
+        raise HTTPException(409, result["error"])
+    return _clean(result)
+
+
+@app.post("/api/calibrate/humidity")
+def calibrate_humidity(body: HumidityCalibrationIn) -> Dict:
+    st = _st()
+    if body.reset:
+        return _clean(st.reset_humidity_calibration())
+    if body.reference_pct is None:
+        raise HTTPException(422, "provide reference_pct, or reset=true")
+    result = st.calibrate_humidity(body.reference_pct)
     if "error" in result:
         raise HTTPException(409, result["error"])
     return _clean(result)

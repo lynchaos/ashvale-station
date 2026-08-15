@@ -55,6 +55,21 @@ class SensorConfig:
     cpu_heat_k: float = 0.55
     cpu_heat_k_min: float = 0.15
     cpu_heat_k_max: float = 1.20
+    # Additive RH bias of the element. The datasheet claims about +/-3.5%, but
+    # measured against a reference hygrometer this board read 75.4% where the
+    # truth was 50.4%, so the clamp has to allow far more than spec. Kept finite
+    # so one mistyped reference still cannot run away.
+    # Move RH from the element's temperature onto the compensated air temperature
+    # via conserved vapour pressure. Physically correct IF the humidity element
+    # really sits at temp_raw. Measured on this board it does not: against a
+    # reference hygrometer reading 50.4%, the HTS221 reported 75.4%, so it reads
+    # HIGH and this correction would push it higher still. The error is an
+    # additive element bias, not a thermal gradient. Leave off unless your own
+    # reference says otherwise.
+    hum_psychrometric: bool = False
+    hum_offset: float = 0.0
+    hum_offset_min: float = -35.0
+    hum_offset_max: float = 35.0
     # Kalman process/measurement noise (per-signal)
     kalman_q_temp: float = 2.0e-6
     kalman_r_temp: float = 0.02

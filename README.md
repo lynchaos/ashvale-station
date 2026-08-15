@@ -166,9 +166,9 @@ eight-pixel type.
 
 | Tab | Answers |
 | --- | --- |
-| **Live** | What is it doing now, what it expects next, and how sure it is |
+| **Live** | What is it doing now, what it expects next, how sure it is, and the week ahead |
 | **History** | What did it do, over any timeframe you ask for |
-| **Models** | Has the model earned its confidence |
+| **Models and calibration** | Has the model earned its confidence, and the calibration inputs |
 | **Methods** | How the whole thing is wired, and how each stage fails |
 
 Live carries the current readings, the observed-and-forecast chart with its 90%

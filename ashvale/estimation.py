@@ -35,6 +35,8 @@ from typing import Dict, Optional
 
 import numpy as np
 
+from .physics import saturation_vapour_pressure
+
 
 @dataclass
 class KalmanCV:
@@ -158,13 +160,104 @@ class ThermalCompensator:
         return tc
 
 
+class HumidityCompensator:
+    """Corrects relative humidity for a sensor sitting hotter than the air.
+
+    The HTS221 reports RH at its own temperature, but the air you care about is
+    at the compensated temperature. Vapour pressure is what is conserved between
+    the two, so
+
+        RH_true = RH_sensor * es(T_sensor) / es(T_true)
+
+    Because the element runs hot, es(T_sensor) > es(T_true) and an uncorrected
+    reading is biased low, by several points on a warm board. That term needs no
+    calibration constant at all: it falls out of the thermal compensation that is
+    already running.
+
+    Measured on real hardware the psychrometric term is the wrong model: against
+    a reference hygrometer reading 50.4%, this board's HTS221 reported 75.4%, so
+    it reads HIGH where the thermal argument predicts LOW. The dominant error is
+    an additive element bias, which is what `offset` corrects, estimated from a
+    trusted reference by the same one-step RLS used for `k` with the regressor
+    fixed at 1, so repeated calibrations converge to a weighted mean. The
+    psychrometric term is therefore off by default and gated on config.
+
+    How it fails: calibrate against a reference while the board is cool, then let
+    CPU load rise, and an offset-only correction drifts because the psychrometric
+    error grows with the gradient. Applying the vapour-pressure term first is
+    exactly what keeps `offset` a constant rather than a function of CPU load.
+    Clamped for the same reason `k` is: one mistyped reference otherwise biases
+    every reading until you notice.
+    """
+
+    def __init__(self, offset: float = 0.0, off_min: float = -35.0,
+                 off_max: float = 35.0, forgetting: float = 0.98,
+                 psychrometric: bool = False):
+        self.psychrometric = bool(psychrometric)
+        self.offset = float(offset)
+        self.off_min, self.off_max = float(off_min), float(off_max)
+        self.P = 10.0
+        self.lam = float(forgetting)
+        self.n_calibrations = 0
+        self.last_residual = 0.0
+
+    def _psychrometric(self, rh_sensor: float, t_sensor: float, t_true: float) -> float:
+        if not self.psychrometric:
+            return float(rh_sensor)
+        es_s = float(saturation_vapour_pressure(t_sensor))
+        es_t = float(saturation_vapour_pressure(t_true))
+        if not np.isfinite(es_s) or not np.isfinite(es_t) or es_t <= 1e-9:
+            return float(rh_sensor)
+        return float(rh_sensor * es_s / es_t)
+
+    def compensate(self, rh_sensor: float, t_sensor: float, t_true: float) -> float:
+        if not (np.isfinite(rh_sensor) and np.isfinite(t_sensor) and np.isfinite(t_true)):
+            return float(rh_sensor)
+        base = self._psychrometric(rh_sensor, t_sensor, t_true)
+        return float(np.clip(base + self.offset, 0.0, 100.0))
+
+    def calibrate(self, rh_sensor: float, t_sensor: float, t_true: float,
+                  rh_reference: float) -> Dict:
+        """One RLS step on the residual offset. Regressor is 1."""
+        base = self._psychrometric(rh_sensor, t_sensor, t_true)
+        target = float(rh_reference) - base
+        denom = self.lam + self.P
+        gain = self.P / denom if denom > 1e-12 else 0.0
+        residual = target - self.offset
+        self.offset = float(np.clip(self.offset + gain * residual,
+                                    self.off_min, self.off_max))
+        self.P = float(np.clip((self.P - gain * self.P) / self.lam, 1e-6, 1e4))
+        self.n_calibrations += 1
+        self.last_residual = float(residual)
+        return {"offset": self.offset, "residual": self.last_residual,
+                "n": self.n_calibrations, "psychrometric": base - float(rh_sensor)}
+
+    def to_dict(self) -> Dict:
+        return {"offset": self.offset, "P": self.P, "lam": self.lam,
+                "off_min": self.off_min, "off_max": self.off_max,
+                "n": self.n_calibrations, "psychrometric": self.psychrometric}
+
+    @classmethod
+    def from_dict(cls, d: Dict) -> "HumidityCompensator":
+        hc = cls(d["offset"], d["off_min"], d["off_max"], d["lam"],
+                 d.get("psychrometric", False))
+        hc.P = d["P"]
+        hc.n_calibrations = d.get("n", 0)
+        return hc
+
+
 class SignalTracker:
-    """Bank of Kalman filters plus the compensator, driven at sample rate."""
+    """Bank of Kalman filters plus the compensators, driven at sample rate."""
 
     def __init__(self, cfg):
         self.compensator = ThermalCompensator(
             cfg.sensor.cpu_heat_k, cfg.sensor.cpu_heat_k_min,
             cfg.sensor.cpu_heat_k_max,
+        )
+        self.hum_compensator = HumidityCompensator(
+            cfg.sensor.hum_offset, cfg.sensor.hum_offset_min,
+            cfg.sensor.hum_offset_max,
+            psychrometric=cfg.sensor.hum_psychrometric,
         )
         self.filters = {
             "temperature": KalmanCV(cfg.sensor.kalman_q_temp, cfg.sensor.kalman_r_temp),
@@ -179,12 +272,16 @@ class SignalTracker:
         self.last_ts = ts
 
         temp_c = self.compensator.compensate(temp_raw, cpu_temp)
+        # RH is reported at the element's temperature, not the air's, so it must
+        # be moved onto the compensated temperature before it is filtered.
+        hum_c = self.hum_compensator.compensate(hum, temp_raw, temp_c)
         t_lvl, t_rate = self.filters["temperature"].update(temp_c, dt)
-        h_lvl, h_rate = self.filters["humidity"].update(hum, dt)
+        h_lvl, h_rate = self.filters["humidity"].update(hum_c, dt)
         p_lvl, p_rate = self.filters["pressure"].update(press, dt)
 
         return {
             "temp_c": temp_c,
+            "hum_c": hum_c,
             "temp_smooth": t_lvl,
             "temp_rate": t_rate * 3600.0,      # C per hour
             "hum_smooth": h_lvl,
@@ -198,12 +295,16 @@ class SignalTracker:
     def to_dict(self) -> Dict:
         return {
             "compensator": self.compensator.to_dict(),
+            "hum_compensator": self.hum_compensator.to_dict(),
             "filters": {k: v.to_dict() for k, v in self.filters.items()},
             "last_ts": self.last_ts,
         }
 
     def load_dict(self, d: Dict) -> None:
         self.compensator = ThermalCompensator.from_dict(d["compensator"])
+        # Absent from state files written before humidity compensation existed.
+        if d.get("hum_compensator"):
+            self.hum_compensator = HumidityCompensator.from_dict(d["hum_compensator"])
         self.filters = {k: KalmanCV.from_dict(v) for k, v in d["filters"].items()}
         self.last_ts = d.get("last_ts")
 

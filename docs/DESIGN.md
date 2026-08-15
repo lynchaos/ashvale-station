@@ -99,6 +99,27 @@ exact inverse:** `T_raw = (T + k·T_cpu)/(1 + k)`. Generating the bias as
 1.2 °C of phantom noise floor that caps every skill score. This has already
 happened once.
 
+### Humidity compensation
+
+`HumidityCompensator` carries an additive `offset` on relative humidity,
+estimated from a trusted hygrometer by the same one-step RLS used for `k`, with
+the regressor fixed at 1 so repeated calibrations converge to a weighted mean.
+Clamped to +/-35% for the same reason `k` is clamped.
+
+It also implements a psychrometric term, moving RH from the element's
+temperature onto the compensated air temperature through conserved vapour
+pressure, `RH_true = RH_sensor * es(T_sensor) / es(T_true)`. That term is
+**off by default**, and the reason is worth recording. The thermal argument
+predicts a hot element reads LOW. Measured against a reference hygrometer this
+board read 75.4% where the truth was 50.4%, so it reads HIGH by 25 points, and
+the correction would have pushed it further the wrong way. The dominant error on
+this hardware is additive element bias, not a thermal gradient.
+
+If you enable `sensor.hum_psychrometric`, `scripts/simulate.py` applies the exact
+inverse when generating synthetic humidity. It has to: the same
+simulator/compensator algebra trap described above for temperature applies here,
+and getting it wrong bakes in a bias no calibration can remove.
+
 ### The Kalman bank
 
 One constant-velocity filter per signal. State `x = [level, rate]`, standard
@@ -302,7 +323,8 @@ consecutive readings are the only tell.
 
 | Symptom | Knob | Direction |
 |---|---|---|
-| Temperature reads consistently high | Calibrate from the Models tab, or `sensor.cpu_heat_k` | Raise |
+| Temperature reads consistently high | Calibrate from the Models and calibration tab, or `sensor.cpu_heat_k` | Raise |
+| Humidity reads consistently off | Calibrate against a reference hygrometer, or `sensor.hum_offset` | Either |
 | Readings over-smoothed, lag real change | `sensor.kalman_q_temp` | Raise |
 | Rates look noisy | `sensor.kalman_q_*` down, or `kalman_r_*` up | |
 | NIS persistently much above 1 | Filter too confident, raise `q` | Raise |

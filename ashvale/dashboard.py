@@ -120,14 +120,14 @@ DASHBOARD_HTML = r"""
   <nav role="tablist" class="glass rounded-2xl p-1.5 flex gap-1.5 overflow-x-auto">
     <button role="tab" data-tab="live"     aria-selected="true"  class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Live</button>
     <button role="tab" data-tab="history"  aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">History</button>
-    <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models</button>
+    <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models and calibration</button>
     <button role="tab" data-tab="methods"  aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Methods</button>
   </nav>
 
   <main class="min-h-0">
 
   <!-- ---------------- LIVE ---------------- -->
-  <section id="pane-live" class="pane active h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr_auto]">
+  <section id="pane-live" class="pane active h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr_auto_auto]">
 
     <div class="glass rounded-2xl p-4 flex flex-col justify-between">
       <div class="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-amber-400">
@@ -216,9 +216,9 @@ DASHBOARD_HTML = r"""
         <h2 class="text-sm font-bold">Conditions ahead</h2>
         <p class="text-[10px] text-indigo-400 font-mono">Zambretti prior + online logistic</p>
       </div>
-      <div class="flex-1 min-h-0 scroller space-y-3 pr-1">
-        <div class="text-center py-1">
-          <div id="c-label" class="text-lg font-extrabold leading-tight">--</div>
+      <div class="flex-1 min-h-0 space-y-2 pr-1">
+        <div class="text-center">
+          <div id="c-label" class="text-base font-extrabold leading-tight">--</div>
           <div class="text-[10px] text-slate-500 font-mono mt-0.5">Z=<span id="c-z">-</span> &middot; <span id="c-trend">-</span></div>
         </div>
         <div>
@@ -226,7 +226,7 @@ DASHBOARD_HTML = r"""
           <div class="h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-800"><div id="c-bar" class="tick h-full bg-gradient-to-r from-cyan-500 to-blue-600" style="width:0%"></div></div>
           <div class="flex justify-between text-[9px] font-mono text-slate-600 mt-1"><span>prior <span id="c-prior">-</span></span><span>learner <span id="c-model">-</span></span><span>trust <span id="c-trust">-</span></span></div>
         </div>
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5 space-y-2">
+        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2 space-y-1.5">
           <div class="text-[10px] text-slate-400 font-mono">Was it wet in the last hour?</div>
           <div class="flex gap-2">
             <button data-label="1" class="rain-label flex-1 px-2 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-[11px] font-medium">Yes, rain</button>
@@ -239,10 +239,21 @@ DASHBOARD_HTML = r"""
             <span class="text-[10px] text-slate-500 font-mono">pressure, last 24 h</span>
             <span id="c-tend" class="text-[10px] text-violet-300 font-mono">--</span>
           </div>
-          <div class="h-20 relative"><canvas id="tendChart"></canvas></div>
-          <p class="text-[9px] text-slate-600 font-mono mt-1 leading-snug">The only signal here that sees past your walls. Its slope, not its level, is what drives the forecast above.</p>
+          <div class="h-14 relative"><canvas id="tendChart"></canvas></div>
+          <p class="text-[9px] text-slate-600 font-mono mt-1 leading-snug">The only signal that sees past your walls. Its slope drives the forecast.</p>
         </div>
       </div>
+    </div>
+
+    <div class="glass rounded-2xl p-4 lg:col-span-4 shrink-0">
+      <div class="flex items-center justify-between mb-2">
+        <div>
+          <h2 class="text-sm font-bold">Seven day outlook</h2>
+          <p class="text-[10px] text-slate-500 font-mono">climatology plus decaying anomaly, not a synoptic forecast</p>
+        </div>
+        <span id="o-badge" class="px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono uppercase font-semibold">warming up</span>
+      </div>
+      <div id="o-strip" class="grid grid-cols-4 sm:grid-cols-7 gap-2"></div>
     </div>
 
     <div class="glass rounded-2xl px-4 py-2.5 lg:col-span-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-x-4 gap-y-1.5 font-mono text-[10px]">
@@ -260,7 +271,7 @@ DASHBOARD_HTML = r"""
   </section>
 
   <!-- ---------------- HISTORY ---------------- -->
-  <section id="pane-history" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr_auto]">
+  <section id="pane-history" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr]">
     <div class="glass rounded-2xl px-4 py-3 lg:col-span-4 flex flex-wrap items-end gap-3">
       <div class="flex gap-1 flex-wrap" id="h-presets">
         <button data-h="6"    class="px-2.5 py-1.5 rounded-lg text-[11px] font-mono border border-slate-800 text-slate-400 hover:text-slate-200">6 h</button>
@@ -300,85 +311,86 @@ DASHBOARD_HTML = r"""
       <div id="rec-all" class="flex-1 min-h-0 scroller pr-1 hidden space-y-1.5"></div>
     </div>
 
-    <div class="glass rounded-2xl p-4 lg:col-span-4 shrink-0">
-      <div class="flex items-center justify-between mb-2">
-        <div>
-          <h2 class="text-sm font-bold">Seven day outlook</h2>
-          <p class="text-[10px] text-slate-500 font-mono">climatology plus decaying anomaly, not a synoptic forecast</p>
-        </div>
-        <span id="o-badge" class="px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono uppercase font-semibold">warming up</span>
-      </div>
-      <div id="o-strip" class="grid grid-cols-4 sm:grid-cols-7 gap-2"></div>
-    </div>
   </section>
 
-  <!-- ---------------- MODELS ---------------- -->
-  <section id="pane-models" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-3 lg:grid-rows-[1fr_auto]">
-    <div class="glass rounded-2xl p-4 lg:col-span-2 flex flex-col min-h-0">
+  <!-- ---------------- MODELS AND CALIBRATION ---------------- -->
+  <!-- Four rows, all sized by content except the log, which absorbs the slack.
+       Nothing here uses an internal scroller: the scorecard is split into one
+       column per target so all 18 heads are visible at once rather than hidden
+       behind a scrollbar. -->
+  <section id="pane-models" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_auto_1fr]">
+
+    <div class="glass rounded-2xl p-4 lg:col-span-4 flex flex-col min-h-0">
       <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 shrink-0">
         <div>
           <h2 class="text-sm font-bold">Verification scorecard</h2>
-          <p class="text-[10px] text-slate-500 font-mono">skill above zero means it beats persistence</p>
+          <p class="text-[10px] text-slate-500 font-mono">skill above zero means it beats persistence &middot; p/c/l is the ensemble weight</p>
         </div>
         <div class="flex gap-1.5">
           <button id="m-verify" class="px-2.5 py-1 rounded-lg text-[11px] font-mono bg-slate-800/60 hover:bg-slate-800 text-slate-300 border border-slate-700">Score now</button>
           <button id="m-train" class="px-2.5 py-1 rounded-lg text-[11px] font-mono bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30">Retrain</button>
         </div>
       </div>
-      <div class="flex-1 min-h-0 scroller pr-1">
-        <table class="w-full text-[11px] font-mono">
-          <thead class="text-slate-600 uppercase text-[9px] sticky top-0 bg-slate-950/90 backdrop-blur">
-            <tr class="border-b border-slate-800">
-              <th class="text-left py-1.5">target</th><th class="text-right">lead</th><th class="text-right">MAE</th>
-              <th class="text-right">persist</th><th class="text-right">skill</th><th class="text-right">cover</th>
-              <th class="text-right">n</th><th class="text-right pl-3">p/c/l</th>
-            </tr>
-          </thead>
-          <tbody id="m-score" class="text-slate-300"></tbody>
-        </table>
-        <p id="m-empty" class="text-[10px] text-slate-600 font-mono mt-3 leading-relaxed">No matured forecasts yet. Rows appear as each horizon reaches its validity time: 15 minutes first, 24 hours tomorrow. The p/c/l column is the ensemble weight on persistence, climatology and the learned model.</p>
+      <div id="m-score" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div>
+      <p id="m-empty" class="text-[10px] text-slate-600 font-mono mt-2 leading-relaxed">No matured forecasts yet. Rows appear as each horizon reaches its validity time: 15 minutes first, 24 hours tomorrow.</p>
+    </div>
+
+    <div class="glass rounded-2xl p-4 flex flex-col">
+      <div class="pb-2 mb-2 border-b border-slate-800 flex items-baseline justify-between">
+        <h2 class="text-sm font-bold">Temperature</h2>
+        <span class="text-[9px] font-mono text-slate-600 uppercase">self-heating</span>
+      </div>
+      <div class="font-mono text-[10px] space-y-1.5">
+        <div class="flex justify-between text-slate-400"><span>coefficient k</span><span id="e-k" class="text-emerald-300 font-bold">--</span></div>
+        <div class="flex justify-between text-slate-500"><span>cpu offset</span><span id="e-off">--</span></div>
+        <div class="flex gap-1.5 pt-1">
+          <input id="m-calin" type="number" step="0.1" placeholder="20.5" class="flex-1 min-w-0 bg-slate-950/70 border border-slate-800 rounded-lg px-2 py-1.5 text-white">
+          <button id="m-calgo" class="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30">Set</button>
+          <button id="m-calrst" class="px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-slate-400 border border-slate-700">Reset</button>
+        </div>
+        <div id="m-calstat" class="text-[9px] text-slate-600 leading-snug">Enter a trusted thermometer reading in &deg;C. One good reading is enough.</div>
       </div>
     </div>
 
-    <div class="glass rounded-2xl p-4 flex flex-col min-h-0">
-      <div class="pb-2 mb-2 border-b border-slate-800 shrink-0"><h2 class="text-sm font-bold">Calibration and state</h2></div>
-      <div class="flex-1 min-h-0 scroller space-y-2.5 pr-1 font-mono text-[10px]">
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5">
-          <div class="flex justify-between text-slate-400"><span>self-heating k</span><span id="e-k" class="text-emerald-300 font-bold">--</span></div>
-          <div class="flex justify-between text-slate-500 mt-1"><span>cpu offset</span><span id="e-off">--</span></div>
-          <div class="text-[9px] text-slate-600 mt-1.5 leading-snug">Removes the SoC bias. Set it from the reading below.</div>
+    <div class="glass rounded-2xl p-4 flex flex-col">
+      <div class="pb-2 mb-2 border-b border-slate-800 flex items-baseline justify-between">
+        <h2 class="text-sm font-bold">Humidity</h2>
+        <span class="text-[9px] font-mono text-slate-600 uppercase">element bias</span>
+      </div>
+      <div class="font-mono text-[10px] space-y-1.5">
+        <div class="flex justify-between text-slate-400"><span>offset</span><span id="e-hoff" class="text-cyan-300 font-bold">--</span></div>
+        <div class="flex justify-between text-slate-500"><span>psychrometric</span><span id="e-hpsy">--</span></div>
+        <div class="flex gap-1.5 pt-1">
+          <input id="m-hcalin" type="number" step="0.5" min="0" max="100" placeholder="55" class="flex-1 min-w-0 bg-slate-950/70 border border-slate-800 rounded-lg px-2 py-1.5 text-white">
+          <button id="m-hcalgo" class="px-2.5 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/30">Set</button>
+          <button id="m-hcalrst" class="px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-slate-400 border border-slate-700">Reset</button>
         </div>
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5 space-y-2">
-          <div class="text-slate-400">Trusted thermometer reading</div>
-          <div class="flex gap-1.5">
-            <input id="m-calin" type="number" step="0.1" placeholder="20.5" class="flex-1 min-w-0 bg-slate-950/70 border border-slate-800 rounded-lg px-2 py-1.5 text-white">
-            <button id="m-calgo" class="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30">Set</button>
-            <button id="m-calrst" class="px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-slate-400 border border-slate-700">Reset</button>
-          </div>
-          <div id="m-calstat" class="text-[9px] text-slate-600 leading-snug">Recursive least squares on the self-heating coefficient. One good reading is enough.</div>
-        </div>
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5">
-          <div class="text-slate-400 mb-1.5">Storage tiers</div>
-          <div id="m-storage" class="space-y-1"></div>
-        </div>
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5">
-          <div class="text-slate-400 mb-1.5">Precipitation coefficients</div>
-          <div id="m-coef" class="space-y-0.5"></div>
-        </div>
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5">
-          <div class="flex justify-between text-slate-400 mb-1"><span>novelty d&sup2;</span><span id="e-nov" class="text-slate-200 font-bold">--</span></div>
-          <div class="h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div id="e-nov-bar" class="tick h-full bg-gradient-to-r from-emerald-500 to-amber-500" style="width:0%"></div></div>
-          <div class="flex justify-between text-slate-400 mt-2 mb-1"><span>drift pressure</span><span id="e-drift" class="text-slate-200 font-bold">--</span></div>
-          <div class="h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div id="e-drift-bar" class="tick h-full bg-gradient-to-r from-indigo-500 to-rose-500" style="width:0%"></div></div>
-          <div class="text-[9px] text-slate-600 mt-1.5 leading-snug">Novelty is a multivariate departure from the recent norm. Drift reaching 100% queues a retrain.</div>
-        </div>
-        <div id="e-health" class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5 space-y-1"></div>
+        <div id="m-hcalstat" class="text-[9px] text-slate-600 leading-snug">Enter a trusted hygrometer reading in %. The psychrometric term is derived, not fitted.</div>
       </div>
     </div>
 
-    <div class="glass rounded-2xl p-4 lg:col-span-3 shrink-0">
-      <h2 class="text-sm font-bold mb-2">Station log</h2>
-      <div id="m-log" class="max-h-28 scroller space-y-1 font-mono text-[10px] pr-1"></div>
+    <div class="glass rounded-2xl p-4 flex flex-col">
+      <div class="pb-2 mb-2 border-b border-slate-800"><h2 class="text-sm font-bold">Estimator</h2></div>
+      <div class="font-mono text-[10px] space-y-1">
+        <div class="flex justify-between text-slate-400"><span>novelty d&sup2;</span><span id="e-nov" class="text-slate-200 font-bold">--</span></div>
+        <div class="h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div id="e-nov-bar" class="tick h-full bg-gradient-to-r from-emerald-500 to-amber-500" style="width:0%"></div></div>
+        <div class="flex justify-between text-slate-400 pt-1"><span>drift pressure</span><span id="e-drift" class="text-slate-200 font-bold">--</span></div>
+        <div class="h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div id="e-drift-bar" class="tick h-full bg-gradient-to-r from-indigo-500 to-rose-500" style="width:0%"></div></div>
+        <div id="e-health" class="pt-1 space-y-0.5"></div>
+      </div>
+    </div>
+
+    <div class="glass rounded-2xl p-4 flex flex-col">
+      <div class="pb-2 mb-2 border-b border-slate-800"><h2 class="text-sm font-bold">Storage and weights</h2></div>
+      <div class="font-mono text-[10px] space-y-1">
+        <div id="m-storage" class="space-y-1"></div>
+        <div id="m-coef" class="space-y-0.5 pt-1.5 mt-1.5 border-t border-slate-800"></div>
+      </div>
+    </div>
+
+    <div class="glass rounded-2xl p-4 lg:col-span-4 flex flex-col min-h-0 overflow-hidden">
+      <h2 class="text-sm font-bold mb-2 shrink-0">Station log</h2>
+      <div id="m-log" class="flex-1 min-h-0 overflow-hidden space-y-1 font-mono text-[10px]"></div>
     </div>
   </section>
 
@@ -453,7 +465,7 @@ el('live-span').addEventListener('click', e => {
     (x===b ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:text-slate-200'));
   loadForecast();
 });
-loaders.live = loadForecast;
+loaders.live = () => { loadForecast(); loadOutlook(); };
 
 function setFlash(id,val) {
   const node = el(id); if (!node || node.innerText===val) return;
@@ -491,6 +503,8 @@ function applyTelemetry(d) {
   el('d-az').innerText = fmt(d.accel && d.accel.z,2);
 
   el('e-k').innerText = fmt(d.compensator_k,4);
+  el('e-hoff').innerText = (d.hum_offset===undefined||d.hum_offset===null) ? '--' : (d.hum_offset>=0?'+':'')+fmt(d.hum_offset,2)+'%';
+  el('e-hpsy').innerText = (d.hum_psychrometric===undefined||d.hum_psychrometric===null) ? '--' : (d.hum_psychrometric>=0?'+':'')+fmt(d.hum_psychrometric,2)+'%';
   el('e-off').innerText = fmt(d.cpu_offset,1)+' K';
   el('e-nov').innerText = fmt(d.novelty_d2,1);
   el('e-nov-bar').style.width = Math.min((d.novelty_d2||0)/24,1)*100+'%';
@@ -754,7 +768,7 @@ function toggleRec(daily) {
 }
 el('rec-tab-daily').addEventListener('click', ()=>toggleRec(true));
 el('rec-tab-all').addEventListener('click', ()=>toggleRec(false));
-loaders.history = () => { if (!histData) loadHistory(); loadOutlook(); };
+loaders.history = () => { if (!histData) loadHistory(); };
 
 /* ---------------- MODELS ---------------- */
 async function loadModels() {
@@ -768,19 +782,31 @@ async function loadModels() {
   (md.nowcast||[]).forEach(h => { wmap[h.target+'@'+h.horizon_s] = h.weights; });
   const rows = sc.rows||[];
   el('m-empty').style.display = rows.length ? 'none' : 'block';
-  el('m-score').innerHTML = rows.map(r=>{
-    const sk = r.skill||0;
-    const cls = sk>0.05?'text-emerald-300':sk<-0.05?'text-rose-300':'text-slate-400';
-    const lead = r.horizon_s<3600 ? (r.horizon_s/60)+'m' : r.horizon_s<86400 ? (r.horizon_s/3600)+'h' : (r.horizon_s/86400)+'d';
-    const w = wmap[r.target+'@'+r.horizon_s];
-    const ws = w ? Math.round(w.persistence*100)+'/'+Math.round(w.climatology*100)+'/'+Math.round(w.learned*100) : '-';
-    return '<tr class="border-b border-slate-800/40"><td class="py-1.5 text-slate-300">'+r.target+'</td>'+
-      '<td class="text-right text-slate-500">'+lead+'</td><td class="text-right">'+fmt(r.mae,3)+'</td>'+
-      '<td class="text-right text-slate-600">'+fmt(r.mae_persistence,3)+'</td>'+
-      '<td class="text-right font-bold '+cls+'">'+Math.round(sk*100)+'%</td>'+
-      '<td class="text-right text-slate-400">'+Math.round((r.coverage||0)*100)+'%</td>'+
-      '<td class="text-right text-slate-700">'+r.n+'</td>'+
-      '<td class="text-right text-slate-500 pl-3">'+ws+'</td></tr>';
+  // One column per target rather than one 18-row table: every head stays
+  // visible instead of hiding behind a scrollbar.
+  const byTarget = {};
+  rows.forEach(r => { (byTarget[r.target] = byTarget[r.target] || []).push(r); });
+  el('m-score').innerHTML = Object.keys(byTarget).map(target => {
+    const body = byTarget[target].map(r => {
+      const sk = r.skill||0;
+      const cls = sk>0.05?'text-emerald-300':sk<-0.05?'text-rose-300':'text-slate-400';
+      const lead = r.horizon_s<3600 ? (r.horizon_s/60)+'m' : r.horizon_s<86400 ? (r.horizon_s/3600)+'h' : (r.horizon_s/86400)+'d';
+      const w = wmap[r.target+'@'+r.horizon_s];
+      const ws = w ? Math.round(w.persistence*100)+'/'+Math.round(w.climatology*100)+'/'+Math.round(w.learned*100) : '-';
+      return '<tr class="border-b border-slate-800/40">'+
+        '<td class="py-1 text-slate-500">'+lead+'</td>'+
+        '<td class="text-right text-slate-200">'+fmt(r.mae,2)+'</td>'+
+        '<td class="text-right text-slate-600">'+fmt(r.mae_persistence,2)+'</td>'+
+        '<td class="text-right font-bold '+cls+'">'+Math.round(sk*100)+'%</td>'+
+        '<td class="text-right text-slate-400">'+Math.round((r.coverage||0)*100)+'%</td>'+
+        '<td class="text-right text-slate-600 pl-2">'+ws+'</td></tr>';
+    }).join('');
+    return '<div class="bg-slate-900/40 rounded-xl border border-slate-800/70 p-2.5">'+
+      '<div class="text-[10px] font-semibold uppercase tracking-wider text-slate-300 mb-1">'+target+'</div>'+
+      '<table class="w-full text-[10px] font-mono"><thead class="text-slate-600 uppercase text-[9px]">'+
+      '<tr class="border-b border-slate-800"><th class="text-left py-1">lead</th><th class="text-right">MAE</th>'+
+      '<th class="text-right">pers</th><th class="text-right">skill</th><th class="text-right">cov</th>'+
+      '<th class="text-right pl-2">p/c/l</th></tr></thead><tbody>'+body+'</tbody></table></div>';
   }).join('');
 
   el('m-storage').innerHTML = (sg.tiers||[]).map(t=>
@@ -836,6 +862,20 @@ el('m-calrst').addEventListener('click', async () => {
   const r = await fetch('/api/calibrate', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({reset:true})}).then(r=>r.json());
   el('m-calstat').innerHTML = 'Reset to prior k = <span class="text-emerald-300">'+r.k+'</span>';
+});
+el('m-hcalgo').addEventListener('click', async () => {
+  const v = parseFloat(el('m-hcalin').value);
+  if (Number.isNaN(v) || v < 0 || v > 100) { el('m-hcalstat').innerText = 'Enter a relative humidity between 0 and 100%.'; return; }
+  const r = await fetch('/api/calibrate/humidity', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({reference_pct:v})}).then(r=>r.json());
+  el('m-hcalstat').innerHTML = r.offset!==undefined
+    ? 'offset is now <span class="text-cyan-300">'+r.offset.toFixed(2)+'%</span>, residual '+r.residual.toFixed(2)+'%'
+    : 'Rejected: no live reading yet.';
+});
+el('m-hcalrst').addEventListener('click', async () => {
+  const r = await fetch('/api/calibrate/humidity', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({reset:true})}).then(r=>r.json());
+  el('m-hcalstat').innerHTML = 'Reset to prior offset = <span class="text-cyan-300">'+r.offset+'%</span>';
 });
 
 /* ---------------- METHODS ---------------- */
@@ -917,10 +957,11 @@ loaders.methods = loadMethods;
 /* ---------------- BOOT ---------------- */
 connectStream();
 loadForecast();
+loadOutlook();
 fetch('/api/status').then(r=>r.json()).then(s => { el('hd-days').innerText = fmt(s.history_days,2); });
-setInterval(() => { if (activeTab==='live') loadForecast(); }, 60000);
+setInterval(() => { if (activeTab==='live') { loadForecast(); loadOutlook(); } }, 60000);
 setInterval(() => { if (activeTab==='models') loadModels(); }, 60000);
-setInterval(() => { if (activeTab==='history') { loadHistory(); loadOutlook(); } }, 300000);
+setInterval(() => { if (activeTab==='history') loadHistory(); }, 300000);
 </script>
 </body>
 </html>

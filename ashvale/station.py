@@ -190,6 +190,8 @@ class Station:
             "cloud_index": cloud,
             "cpu_offset": (raw.get("cpu_temp") or float("nan")) - (raw.get("temp_raw") or float("nan")),
             "compensator_k": self.tracker.compensator.k,
+            "hum_offset": self.tracker.hum_compensator.offset,
+            "hum_psychrometric": float(est["hum_c"]) - float(raw.get("hum") or float("nan")),
             "health": anomaly["health_overall"],
             "novelty_d2": anomaly["novelty"].get("d2", 0.0),
         }
@@ -264,6 +266,32 @@ class Station:
         self.store.log_event("calibration", "info",
                              f"k -> {result['k']:.3f} (residual {result['residual']:+.2f} C)")
         return result
+
+    def calibrate_humidity(self, reference_pct: float) -> Dict:
+        raw_h = self.live.get("hum")
+        raw_t = self.live.get("temp_raw")
+        temp_c = self.live.get("temp_c")
+        if raw_h is None or raw_t is None or temp_c is None:
+            return {"error": "no live reading yet"}
+        result = self.tracker.hum_compensator.calibrate(
+            float(raw_h), float(raw_t), float(temp_c), float(reference_pct))
+        self.save_state()
+        self.store.log_event("calibration", "info",
+                             f"rh offset -> {result['offset']:+.2f}% "
+                             f"(residual {result['residual']:+.2f}%)")
+        return result
+
+    def reset_humidity_calibration(self) -> Dict:
+        from .estimation import HumidityCompensator
+        self.tracker.hum_compensator = HumidityCompensator(
+            self.cfg.sensor.hum_offset, self.cfg.sensor.hum_offset_min,
+            self.cfg.sensor.hum_offset_max,
+            psychrometric=self.cfg.sensor.hum_psychrometric,
+        )
+        self.save_state()
+        self.store.log_event("calibration", "info",
+                             f"rh offset reset to prior {self.cfg.sensor.hum_offset}")
+        return {"offset": self.tracker.hum_compensator.offset, "reset": True, "n": 0}
 
     def reset_calibration(self) -> Dict:
         """Return the self-heating coefficient to its configured prior.

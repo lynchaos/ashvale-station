@@ -62,7 +62,8 @@ from ashvale.storage import Store  # noqa: E402
 
 
 def generate(days: float, step_s: int, lat: float, lon: float,
-             seed: int = 11, end: float | None = None) -> dict:
+             seed: int = 11, end: float | None = None,
+             psychrometric: bool = False) -> dict:
     rng = np.random.default_rng(seed)
     n = int(days * 86400 / step_s)
     # Anchoring to wall clock makes a fixed seed insufficient for reproducibility:
@@ -131,11 +132,21 @@ def generate(days: float, step_s: int, lat: float, lon: float,
     # no amount of calibration can remove, and quietly caps your skill score.
     k_true = 0.55
     temp_raw = (temp + k_true * cpu) / (1.0 + k_true) + 0.05 * rng.normal(size=n)
+    # If the compensator will move RH from the element temperature onto the air
+    # temperature, the forward model here must be its exact inverse, or the
+    # synthetic data bakes in a bias no calibration can remove. Same trap as the
+    # thermal algebra above. Off by default, matching sensor.hum_psychrometric.
+    if psychrometric:
+        es_raw = 6.112 * np.exp(17.625 * temp_raw / (243.04 + temp_raw))
+        rh_sensor = np.clip(rh * es_t / es_raw, 0.0, 100.0)
+    else:
+        rh_sensor = rh
+
     press_station = press_slp / (1.0 + 0.0) - 1.8      # nominal 15 m offset
     press_station += 0.05 * rng.normal(size=n)
 
     return {
-        "ts": ts, "temp": temp, "temp_raw": temp_raw, "rh": rh + 0.4 * rng.normal(size=n),
+        "ts": ts, "temp": temp, "temp_raw": temp_raw, "rh": rh_sensor + 0.4 * rng.normal(size=n),
         "press": press_station, "press_slp": press_slp, "cpu": cpu,
         "lux": lux * (0.85 + 0.3 * rng.random(n)), "dew": dew, "cloud": cloud,
     }
@@ -176,7 +187,7 @@ def main() -> None:
         print("cleared existing telemetry, forecasts and scores")
 
     data = generate(args.days, args.step, cfg.site.latitude, cfg.site.longitude,
-                    args.seed, args.end)
+                    args.seed, args.end, cfg.sensor.hum_psychrometric)
     tracker = SignalTracker(cfg)
 
     n = data["ts"].size
