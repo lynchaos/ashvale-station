@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The dashboard: five tabs, one viewport, no scrolling.
+"""The dashboard: four tabs, one viewport, no scrolling.
 
 Layout contract. The page is a fixed three-row grid pinned to the
 viewport height: header, tab bar, then a content region that takes the
@@ -119,7 +119,6 @@ DASHBOARD_HTML = r"""
 
   <nav role="tablist" class="glass rounded-2xl p-1.5 flex gap-1.5 overflow-x-auto">
     <button role="tab" data-tab="live"     aria-selected="true"  class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Live</button>
-    <button role="tab" data-tab="forecast" aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Forecast</button>
     <button role="tab" data-tab="history"  aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">History</button>
     <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models</button>
     <button role="tab" data-tab="methods"  aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Methods</button>
@@ -191,65 +190,17 @@ DASHBOARD_HTML = r"""
     </div>
 
     <div class="glass rounded-2xl p-4 lg:col-span-3 flex flex-col min-h-0">
-      <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 shrink-0">
-        <div class="flex items-center gap-2">
-          <h2 class="text-sm font-bold">Rolling window</h2>
-          <span class="px-1.5 py-0.5 text-[9px] font-mono rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 uppercase">2 s stream</span>
-        </div>
-        <div class="flex gap-1" id="live-span">
-          <button data-min="60" class="px-2 py-1 rounded-lg text-[10px] font-mono border border-slate-800 bg-indigo-600/20 text-indigo-300">1 h</button>
-          <button data-min="360" class="px-2 py-1 rounded-lg text-[10px] font-mono border border-slate-800 text-slate-400 hover:text-slate-200">6 h</button>
-          <button data-min="1440" class="px-2 py-1 rounded-lg text-[10px] font-mono border border-slate-800 text-slate-400 hover:text-slate-200">24 h</button>
-        </div>
-      </div>
-      <div class="flex-1 min-h-0 relative"><canvas id="liveChart"></canvas></div>
-    </div>
-
-    <div class="glass rounded-2xl p-4 flex flex-col min-h-0">
-      <div class="pb-2 mb-2 border-b border-slate-800 shrink-0">
-        <h2 class="text-sm font-bold">Estimator internals</h2>
-        <p class="text-[10px] text-indigo-400 font-mono">what the filter is doing right now</p>
-      </div>
-      <div class="flex-1 min-h-0 scroller space-y-2 font-mono text-[10px] pr-1">
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5">
-          <div class="flex justify-between text-slate-400"><span>self-heating k</span><span id="e-k" class="text-emerald-300 font-bold">--</span></div>
-          <div class="flex justify-between text-slate-500 mt-1"><span>cpu offset</span><span id="e-off">--</span></div>
-          <div class="text-[9px] text-slate-600 mt-1.5 leading-snug">Removes the SoC bias. Calibrate it on the Models tab.</div>
-        </div>
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5">
-          <div class="flex justify-between text-slate-400 mb-1"><span>novelty d&sup2;</span><span id="e-nov" class="text-slate-200 font-bold">--</span></div>
-          <div class="h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div id="e-nov-bar" class="tick h-full bg-gradient-to-r from-emerald-500 to-amber-500" style="width:0%"></div></div>
-          <div class="flex justify-between text-slate-400 mt-2 mb-1"><span>drift pressure</span><span id="e-drift" class="text-slate-200 font-bold">--</span></div>
-          <div class="h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div id="e-drift-bar" class="tick h-full bg-gradient-to-r from-indigo-500 to-rose-500" style="width:0%"></div></div>
-          <div class="text-[9px] text-slate-600 mt-1.5 leading-snug">Novelty is a multivariate departure from the recent norm. Drift reaching 100% queues a retrain.</div>
-        </div>
-        <div id="e-health" class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5 space-y-1"></div>
-      </div>
-    </div>
-
-    <div class="glass rounded-2xl px-4 py-2.5 lg:col-span-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-x-4 gap-y-1.5 font-mono text-[10px]">
-      <div><div class="text-slate-600 uppercase">wet bulb</div><div id="d-wb" class="text-slate-200 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">vpd</div><div id="d-vpd" class="text-slate-200 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">abs hum</div><div id="d-ah" class="text-slate-200 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">heat idx</div><div id="d-hi" class="text-slate-200 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">solar el</div><div id="d-el" class="text-slate-200 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">pitch</div><div id="d-pitch" class="text-amber-300 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">roll</div><div id="d-roll" class="text-cyan-300 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">yaw</div><div id="d-yaw" class="text-indigo-300 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">compass</div><div id="d-comp" class="text-emerald-300 font-semibold">--</div></div>
-      <div><div class="text-slate-600 uppercase">accel z</div><div id="d-az" class="text-slate-200 font-semibold">--</div></div>
-    </div>
-  </section>
-
-  <!-- ---------------- FORECAST ---------------- -->
-  <section id="pane-forecast" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-3 lg:grid-rows-[1fr_auto]">
-    <div class="glass rounded-2xl p-4 lg:col-span-2 flex flex-col min-h-0">
       <div class="flex flex-wrap items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-800 shrink-0">
-        <div>
+        <div class="flex items-center gap-2">
           <h2 class="text-sm font-bold">Observed and forecast</h2>
-          <p class="text-[10px] text-slate-500 font-mono">shaded band is the 90% conformal interval</p>
+          <span class="px-1.5 py-0.5 text-[9px] font-mono rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 uppercase">90% band</span>
         </div>
         <div class="flex items-center gap-1.5">
+          <div class="flex gap-1" id="live-span">
+            <button data-min="60" class="px-2 py-1 rounded-lg text-[10px] font-mono border border-slate-800 text-slate-400 hover:text-slate-200">1 h</button>
+            <button data-min="360" class="px-2 py-1 rounded-lg text-[10px] font-mono border border-slate-800 text-slate-400 hover:text-slate-200">6 h</button>
+            <button data-min="1440" class="px-2 py-1 rounded-lg text-[10px] font-mono border border-slate-800 bg-indigo-600/20 text-indigo-300">24 h</button>
+          </div>
           <select id="fc-target" class="bg-slate-900/90 border border-slate-800 text-slate-300 text-[11px] font-mono rounded-lg px-2 py-1">
             <option value="temperature">temperature</option><option value="humidity">humidity</option><option value="pressure">pressure</option>
           </select>
@@ -294,20 +245,22 @@ DASHBOARD_HTML = r"""
       </div>
     </div>
 
-    <div class="glass rounded-2xl p-4 lg:col-span-3 shrink-0">
-      <div class="flex items-center justify-between mb-2">
-        <div>
-          <h2 class="text-sm font-bold">Seven day outlook</h2>
-          <p class="text-[10px] text-slate-500 font-mono">climatology plus decaying anomaly, not a synoptic forecast</p>
-        </div>
-        <span id="o-badge" class="px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono uppercase font-semibold">warming up</span>
-      </div>
-      <div id="o-strip" class="grid grid-cols-4 sm:grid-cols-7 gap-2"></div>
+    <div class="glass rounded-2xl px-4 py-2.5 lg:col-span-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-x-4 gap-y-1.5 font-mono text-[10px]">
+      <div><div class="text-slate-600 uppercase">wet bulb</div><div id="d-wb" class="text-slate-200 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">vpd</div><div id="d-vpd" class="text-slate-200 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">abs hum</div><div id="d-ah" class="text-slate-200 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">heat idx</div><div id="d-hi" class="text-slate-200 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">solar el</div><div id="d-el" class="text-slate-200 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">pitch</div><div id="d-pitch" class="text-amber-300 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">roll</div><div id="d-roll" class="text-cyan-300 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">yaw</div><div id="d-yaw" class="text-indigo-300 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">compass</div><div id="d-comp" class="text-emerald-300 font-semibold">--</div></div>
+      <div><div class="text-slate-600 uppercase">accel z</div><div id="d-az" class="text-slate-200 font-semibold">--</div></div>
     </div>
   </section>
 
   <!-- ---------------- HISTORY ---------------- -->
-  <section id="pane-history" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr]">
+  <section id="pane-history" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_1fr_auto]">
     <div class="glass rounded-2xl px-4 py-3 lg:col-span-4 flex flex-wrap items-end gap-3">
       <div class="flex gap-1 flex-wrap" id="h-presets">
         <button data-h="6"    class="px-2.5 py-1.5 rounded-lg text-[11px] font-mono border border-slate-800 text-slate-400 hover:text-slate-200">6 h</button>
@@ -346,6 +299,17 @@ DASHBOARD_HTML = r"""
       <div id="rec-daily" class="flex-1 min-h-0 scroller pr-1"></div>
       <div id="rec-all" class="flex-1 min-h-0 scroller pr-1 hidden space-y-1.5"></div>
     </div>
+
+    <div class="glass rounded-2xl p-4 lg:col-span-4 shrink-0">
+      <div class="flex items-center justify-between mb-2">
+        <div>
+          <h2 class="text-sm font-bold">Seven day outlook</h2>
+          <p class="text-[10px] text-slate-500 font-mono">climatology plus decaying anomaly, not a synoptic forecast</p>
+        </div>
+        <span id="o-badge" class="px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono uppercase font-semibold">warming up</span>
+      </div>
+      <div id="o-strip" class="grid grid-cols-4 sm:grid-cols-7 gap-2"></div>
+    </div>
   </section>
 
   <!-- ---------------- MODELS ---------------- -->
@@ -379,6 +343,11 @@ DASHBOARD_HTML = r"""
     <div class="glass rounded-2xl p-4 flex flex-col min-h-0">
       <div class="pb-2 mb-2 border-b border-slate-800 shrink-0"><h2 class="text-sm font-bold">Calibration and state</h2></div>
       <div class="flex-1 min-h-0 scroller space-y-2.5 pr-1 font-mono text-[10px]">
+        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5">
+          <div class="flex justify-between text-slate-400"><span>self-heating k</span><span id="e-k" class="text-emerald-300 font-bold">--</span></div>
+          <div class="flex justify-between text-slate-500 mt-1"><span>cpu offset</span><span id="e-off">--</span></div>
+          <div class="text-[9px] text-slate-600 mt-1.5 leading-snug">Removes the SoC bias. Set it from the reading below.</div>
+        </div>
         <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5 space-y-2">
           <div class="text-slate-400">Trusted thermometer reading</div>
           <div class="flex gap-1.5">
@@ -396,6 +365,14 @@ DASHBOARD_HTML = r"""
           <div class="text-slate-400 mb-1.5">Precipitation coefficients</div>
           <div id="m-coef" class="space-y-0.5"></div>
         </div>
+        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5">
+          <div class="flex justify-between text-slate-400 mb-1"><span>novelty d&sup2;</span><span id="e-nov" class="text-slate-200 font-bold">--</span></div>
+          <div class="h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div id="e-nov-bar" class="tick h-full bg-gradient-to-r from-emerald-500 to-amber-500" style="width:0%"></div></div>
+          <div class="flex justify-between text-slate-400 mt-2 mb-1"><span>drift pressure</span><span id="e-drift" class="text-slate-200 font-bold">--</span></div>
+          <div class="h-1.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div id="e-drift-bar" class="tick h-full bg-gradient-to-r from-indigo-500 to-rose-500" style="width:0%"></div></div>
+          <div class="text-[9px] text-slate-600 mt-1.5 leading-snug">Novelty is a multivariate departure from the recent norm. Drift reaching 100% queues a retrain.</div>
+        </div>
+        <div id="e-health" class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2.5 space-y-1"></div>
       </div>
     </div>
 
@@ -464,43 +441,19 @@ function pushSpark(k,v) {
   sparks[k].update('none');
 }
 
-charts.live = new Chart(el('liveChart').getContext('2d'), {
-  type:'line',
-  data:{ datasets:[
-    { label:'temperature', data:[], borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,.10)',
-      fill:true, borderWidth:2, pointRadius:0, tension:.3, parsing:false, yAxisID:'y' },
-    { label:'humidity', data:[], borderColor:'#06b6d4', borderWidth:2, pointRadius:0,
-      tension:.3, parsing:false, yAxisID:'y1' } ]},
-  options:{ responsive:true, maintainAspectRatio:false, animation:false,
-    interaction:{ mode:'index', intersect:false },
-    scales:{
-      x:{ type:'linear', grid:{color:GRID}, ticks:{ color:'#64748b', font:MONO, maxTicksLimit:7,
-        callback:v=>new Date(v*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) } },
-      y:{ position:'left', grid:{color:GRID}, ticks:{ color:'#f59e0b', font:MONO, callback:v=>v.toFixed(1)+'\u00b0' } },
-      y1:{ position:'right', grid:{drawOnChartArea:false}, ticks:{ color:'#06b6d4', font:MONO, callback:v=>v.toFixed(0)+'%' } } },
-    plugins:{ legend:{display:false},
-      tooltip:{ backgroundColor:'rgba(15,23,42,.95)', borderColor:'rgba(255,255,255,.1)', borderWidth:1,
-        titleFont:MONO, bodyFont:{family:'Plus Jakarta Sans',size:11},
-        callbacks:{ title:i=>new Date(i[0].parsed.x*1000).toLocaleTimeString() } } } }
-});
-
-let liveMin = 60;
+// The Live tab now carries the forecast chart, which already plots observed
+// history alongside the prediction, so a separate rolling-window chart would
+// only duplicate its left half. These buttons resize the observed portion.
+let liveMin = 1440;
 el('live-span').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   liveMin = Number(b.dataset.min);
   [...el('live-span').children].forEach(x => x.className =
     'px-2 py-1 rounded-lg text-[10px] font-mono border border-slate-800 ' +
     (x===b ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:text-slate-200'));
-  loadLiveChart();
+  loadForecast();
 });
-async function loadLiveChart() {
-  const r = await fetch('/api/history/range?hours='+(liveMin/60)).then(r=>r.json());
-  const s = r.series||{};
-  charts.live.data.datasets[0].data = (s.ts||[]).map((t,i)=>({x:t,y:s.temp[i]})).filter(p=>p.y!=null);
-  charts.live.data.datasets[1].data = (s.ts||[]).map((t,i)=>({x:t,y:s.hum[i]})).filter(p=>p.y!=null);
-  charts.live.update('none');
-}
-loaders.live = loadLiveChart;
+loaders.live = loadForecast;
 
 function setFlash(id,val) {
   const node = el(id); if (!node || node.innerText===val) return;
@@ -616,7 +569,7 @@ async function loadForecast() {
   const target = el('fc-target').value;
   const key = {temperature:'temp', humidity:'hum', pressure:'press'}[target];
   const res = await Promise.all([
-    fetch('/api/history/range?hours=24').then(r=>r.json()),
+    fetch('/api/history/range?hours='+(liveMin/60)).then(r=>r.json()),
     fetch('/api/forecast').then(r=>r.json()) ]);
   const hist = res[0], fc = res[1], s = hist.series||{};
   charts.fan.data.datasets[0].data = (s.ts||[]).map((t,i)=>({x:t,y:s[key][i]})).filter(p=>p.y!=null);
@@ -655,7 +608,6 @@ async function loadOutlook() {
       '<div class="text-[9px] text-indigo-400/80 font-mono">&plusmn;'+sp.toFixed(1)+'</div></div>';
   }).join('');
 }
-loaders.forecast = () => { loadForecast(); loadOutlook(); };
 document.querySelectorAll('.rain-label').forEach(b => b.addEventListener('click', async () => {
   const res = await fetch('/api/label', { method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({kind:'rain', value:Number(b.dataset.label)}) }).then(r=>r.json());
@@ -802,7 +754,7 @@ function toggleRec(daily) {
 }
 el('rec-tab-daily').addEventListener('click', ()=>toggleRec(true));
 el('rec-tab-all').addEventListener('click', ()=>toggleRec(false));
-loaders.history = () => { if (!histData) loadHistory(); };
+loaders.history = () => { if (!histData) loadHistory(); loadOutlook(); };
 
 /* ---------------- MODELS ---------------- */
 async function loadModels() {
@@ -964,12 +916,11 @@ loaders.methods = loadMethods;
 
 /* ---------------- BOOT ---------------- */
 connectStream();
-loadLiveChart();
+loadForecast();
 fetch('/api/status').then(r=>r.json()).then(s => { el('hd-days').innerText = fmt(s.history_days,2); });
-setInterval(() => { if (activeTab==='live') loadLiveChart(); }, 60000);
-setInterval(() => { if (activeTab==='forecast') { loadForecast(); loadOutlook(); } }, 120000);
+setInterval(() => { if (activeTab==='live') loadForecast(); }, 60000);
 setInterval(() => { if (activeTab==='models') loadModels(); }, 60000);
-setInterval(() => { if (activeTab==='history') loadHistory(); }, 300000);
+setInterval(() => { if (activeTab==='history') { loadHistory(); loadOutlook(); } }, 300000);
 </script>
 </body>
 </html>

@@ -221,7 +221,7 @@ def pipeline(cfg) -> List[Dict[str, Any]]:
                        "label abstains in the ambiguous middle rather than "
                        "guessing, because a poisoned training set costs more than "
                        "the extra samples buy. Trust grows as n/(n+25) in strong "
-                       "labels, so the two buttons on the Forecast tab matter.",
+                       "labels, so the two buttons on the Live tab matter.",
             "params": {"prior": "Zambretti, three-branch",
                        "learner": "logistic, AdaGrad",
                        "strong label weight": "10x proxy"},

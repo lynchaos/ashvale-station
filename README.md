@@ -160,17 +160,20 @@ permanently.
 
 ## The dashboard
 
-Five tabs, one viewport, no scrolling on desktop. Below 1024 px the constraint is
-released, because pinning five panels into a phone viewport produces unreadable
+Four tabs, one viewport, no scrolling on desktop. Below 1024 px the constraint is
+released, because pinning four panels into a phone viewport produces unreadable
 eight-pixel type.
 
 | Tab | Answers |
 | --- | --- |
-| **Live** | What is it doing right now |
-| **Forecast** | What is it about to do, and how sure are we |
+| **Live** | What is it doing now, what it expects next, and how sure it is |
 | **History** | What did it do, over any timeframe you ask for |
 | **Models** | Has the model earned its confidence |
 | **Methods** | How the whole thing is wired, and how each stage fails |
+
+Live carries the current readings, the observed-and-forecast chart with its 90%
+conformal band, and the precipitation panel together, so the question "what is
+it doing and what happens next" is answered without changing tab.
 
 ### History
 
