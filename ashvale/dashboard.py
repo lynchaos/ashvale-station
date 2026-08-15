@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The dashboard: five tabs in the header, one viewport, no scrolling.
+"""The dashboard: six tabs in the header, one viewport, no scrolling.
 
 Layout contract. The page is a fixed three-row grid pinned to the
 viewport height: header, tab bar, then a content region that takes the
@@ -119,6 +119,7 @@ DASHBOARD_HTML = r"""
       <button role="tab" data-tab="history"  aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">History</button>
       <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models and Calibration</button>
       <button role="tab" data-tab="nerd"     aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Stats for Nerds</button>
+      <button role="tab" data-tab="settings" aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Settings</button>
       <button role="tab" data-tab="methods"  aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Methods</button>
     </nav>
 
@@ -462,6 +463,97 @@ DASHBOARD_HTML = r"""
         <span class="text-[9px] font-mono text-slate-600 uppercase">realised coverage against the 90% nominal</span>
       </div>
       <div id="n-rel" class="grid grid-cols-3 sm:grid-cols-6 gap-x-3 gap-y-0.5 font-mono text-[9px]"></div>
+    </div>
+  </section>
+
+  <!-- ---------------- SETTINGS ---------------- -->
+  <section id="pane-settings" class="pane h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-3 lg:grid-rows-[auto_1fr]">
+
+    <div class="glass rounded-2xl p-4 lg:col-span-2 flex flex-col">
+      <div class="flex items-baseline justify-between pb-2 mb-2 border-b border-slate-800">
+        <div>
+          <h2 class="text-sm font-bold">Surroundings</h2>
+          <p class="text-[10px] text-slate-500 font-mono">a change here marks a discontinuity and queues a retrain</p>
+        </div>
+        <span id="s-env-state" class="text-[10px] font-mono text-emerald-300">--</span>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <div class="text-[10px] text-slate-600 font-mono uppercase mb-1">where it lives</div>
+          <div id="s-environment" class="flex gap-1 flex-wrap"></div>
+          <p class="text-[9px] text-slate-600 leading-snug mt-1.5">Indoors the building governs temperature and humidity, not the sky. Pressure passes through walls, which is why precipitation runs on tendency.</p>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-600 font-mono uppercase mb-1">enclosure</div>
+          <div id="s-enclosure" class="flex gap-1 flex-wrap"></div>
+          <p class="text-[9px] text-slate-600 leading-snug mt-1.5">Closing a door changes how strongly the sensor couples to outside. The heads carry about 55 hours of memory, so tell them rather than waiting two days.</p>
+        </div>
+      </div>
+      <div class="flex gap-2 mt-3">
+        <input id="s-note" placeholder="what changed, e.g. doors shut, felt chilly"
+               class="flex-1 min-w-0 bg-slate-950/70 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-white">
+        <button id="s-env-apply" class="px-3 py-1.5 rounded-lg text-[11px] font-mono bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30">Record change</button>
+      </div>
+    </div>
+
+    <div class="glass rounded-2xl p-4 flex flex-col">
+      <div class="pb-2 mb-2 border-b border-slate-800"><h2 class="text-sm font-bold">Matrix</h2></div>
+      <div class="font-mono text-[10px] space-y-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-slate-400">8x8 display</span>
+          <button id="s-led" class="px-2.5 py-1 rounded-lg border text-[10px]">--</button>
+        </div>
+        <div>
+          <div class="flex justify-between text-slate-400 mb-1"><span>frame rate</span><span id="s-fps-val" class="text-indigo-300 font-bold">--</span></div>
+          <input id="s-fps" type="range" min="4" max="30" step="1" class="w-full accent-indigo-500">
+          <p class="text-[9px] text-slate-600 leading-snug mt-1">24 costs about 11% of one core. 16 is still fluid and a third cheaper. Below 12 the crossfades judder.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="glass rounded-2xl p-4 lg:col-span-2 flex flex-col min-h-0">
+      <div class="pb-2 mb-2 border-b border-slate-800 shrink-0">
+        <h2 class="text-sm font-bold">Site and model</h2>
+        <p class="text-[10px] text-slate-500 font-mono">altitude feeds the sea-level reduction on every row</p>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono text-[10px]">
+        <label class="block"><span class="text-slate-600 uppercase text-[9px]">altitude m</span>
+          <input id="s-alt" type="number" step="0.5" class="w-full mt-0.5 bg-slate-950/70 border border-slate-800 rounded-lg px-2 py-1.5 text-white"></label>
+        <label class="block"><span class="text-slate-600 uppercase text-[9px]">latitude</span>
+          <input id="s-lat" type="number" step="0.0001" class="w-full mt-0.5 bg-slate-950/70 border border-slate-800 rounded-lg px-2 py-1.5 text-white"></label>
+        <label class="block"><span class="text-slate-600 uppercase text-[9px]">longitude</span>
+          <input id="s-lon" type="number" step="0.0001" class="w-full mt-0.5 bg-slate-950/70 border border-slate-800 rounded-lg px-2 py-1.5 text-white"></label>
+        <div class="flex items-end">
+          <button id="s-site-apply" class="w-full px-2 py-1.5 rounded-lg text-[10px] bg-slate-800/60 hover:bg-slate-800 text-slate-200 border border-slate-700">Apply</button>
+        </div>
+      </div>
+      <div class="mt-3 pt-3 border-t border-slate-800 flex items-start justify-between gap-3">
+        <div class="flex-1">
+          <div class="text-[11px] font-semibold text-slate-300">Psychrometric humidity correction</div>
+          <p class="text-[9px] text-slate-600 leading-snug mt-0.5">Moves RH from the element's temperature onto air temperature. Off by default: measured against a reference this board read 75.4% where the truth was 50.4%, so it reads high and this would push it higher.</p>
+        </div>
+        <button id="s-psy" class="shrink-0 px-2.5 py-1 rounded-lg border text-[10px] font-mono">--</button>
+      </div>
+      <div id="s-msg" class="mt-auto pt-2 text-[10px] font-mono text-slate-500"></div>
+    </div>
+
+    <div class="glass rounded-2xl p-4 flex flex-col min-h-0">
+      <div class="pb-2 mb-2 border-b border-slate-800 shrink-0"><h2 class="text-sm font-bold">Maintenance</h2></div>
+      <div class="space-y-2 font-mono text-[10px]">
+        <button id="s-recompute" class="w-full px-2 py-2 rounded-lg bg-amber-600/15 hover:bg-amber-600/25 text-amber-300 border border-amber-500/30 text-left">
+          <div class="font-semibold">Re-derive history</div>
+          <div class="text-[9px] text-amber-200/60 leading-snug">Recompute every stored row from the raw values with the current calibration. Removes the step a calibration leaves behind.</div>
+        </button>
+        <button id="s-retrain" class="w-full px-2 py-2 rounded-lg bg-indigo-600/15 hover:bg-indigo-600/25 text-indigo-300 border border-indigo-500/30 text-left">
+          <div class="font-semibold">Retrain now</div>
+          <div class="text-[9px] text-indigo-200/60 leading-snug">Refit all 18 heads. 60 to 100 s on a Zero 2 W, in a worker thread.</div>
+        </button>
+        <button id="s-verify" class="w-full px-2 py-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-slate-300 border border-slate-700 text-left">
+          <div class="font-semibold">Score now</div>
+          <div class="text-[9px] text-slate-500 leading-snug">Verify matured forecasts against persistence.</div>
+        </button>
+        <div id="s-maint" class="text-[9px] text-slate-600 pt-1"></div>
+      </div>
     </div>
   </section>
 
@@ -989,6 +1081,95 @@ el('m-hcalrst').addEventListener('click', async () => {
     body: JSON.stringify({reset:true})}).then(r=>r.json());
   el('m-hcalstat').innerHTML = 'Reset to prior offset = <span class="text-cyan-300">'+r.offset+'%</span>';
 });
+
+/* ---------------- SETTINGS ---------------- */
+let settingsDoc = null;
+const PILL_ON  = 'px-2 py-1 rounded-lg text-[10px] font-mono border bg-indigo-600/25 text-indigo-200 border-indigo-500/40';
+const PILL_OFF = 'px-2 py-1 rounded-lg text-[10px] font-mono border border-slate-800 text-slate-500 hover:text-slate-300';
+function sMsg(node, text, good) {
+  el(node).innerHTML = '<span class="'+(good?'text-emerald-300':'text-rose-300')+'">'+text+'</span>';
+  setTimeout(()=>{ if (el(node).innerText===text) el(node).innerHTML=''; }, 9000);
+}
+async function loadSettings() {
+  const d = await fetch('/api/settings').then(r=>r.json());
+  settingsDoc = d;
+  const site = d.site||{}, srv = d.server||{}, sen = d.sensor||{};
+
+  el('s-env-state').innerText = site.environment+' / '+site.enclosure;
+  const opts = d.options||{};
+  for (const [id, key] of [['s-environment','environment'], ['s-enclosure','enclosure']]) {
+    el(id).innerHTML = (opts[key]||[]).map(v =>
+      '<button data-group="'+key+'" data-value="'+v+'" class="'+
+      (v===site[key] ? PILL_ON : PILL_OFF)+'">'+v+'</button>').join('');
+  }
+  el('s-led').innerText = srv.led_enabled ? 'on' : 'off';
+  el('s-led').className = srv.led_enabled ? PILL_ON : PILL_OFF;
+  el('s-fps').value = srv.led_fps;
+  el('s-fps-val').innerText = srv.led_fps + ' fps';
+  el('s-alt').value = site.altitude_m;
+  el('s-lat').value = site.latitude;
+  el('s-lon').value = site.longitude;
+  el('s-psy').innerText = sen.hum_psychrometric ? 'on' : 'off';
+  el('s-psy').className = sen.hum_psychrometric ? PILL_ON : PILL_OFF;
+}
+loaders.settings = loadSettings;
+
+async function postSettings(body, node) {
+  const r = await fetch('/api/settings', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r=>r.json());
+  await loadSettings();
+  if (!r.changed) { sMsg(node, 'nothing changed', true); return r; }
+  let msg = r.applied.join(' &middot; ');
+  // Altitude and the psychrometric flag both change how stored rows should read,
+  // so say so rather than leaving a silent inconsistency in the history.
+  if (r.needs_recompute) msg += ' &mdash; history now inconsistent, re-derive it';
+  sMsg(node, msg, true);
+  return r;
+}
+
+// Selecting a pill only stages it; nothing is recorded until you say so, because
+// this writes a discontinuity marker and queues a retrain.
+let pending = {};
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-group]');
+  if (!b) return;
+  pending[b.dataset.group] = b.dataset.value;
+  [...b.parentElement.children].forEach(x =>
+    x.className = (x===b ? PILL_ON : PILL_OFF));
+});
+el('s-env-apply').addEventListener('click', async () => {
+  const body = Object.assign({}, pending, {note: el('s-note').value || ''});
+  if (!Object.keys(pending).length) { sMsg('s-msg','pick a state first', false); return; }
+  await postSettings(body, 's-msg');
+  pending = {}; el('s-note').value = '';
+});
+el('s-led').addEventListener('click', () =>
+  postSettings({led_enabled: !(settingsDoc.server||{}).led_enabled}, 's-msg'));
+el('s-psy').addEventListener('click', () =>
+  postSettings({hum_psychrometric: !(settingsDoc.sensor||{}).hum_psychrometric}, 's-msg'));
+el('s-fps').addEventListener('input', e => el('s-fps-val').innerText = e.target.value + ' fps');
+el('s-fps').addEventListener('change', e =>
+  postSettings({led_fps: Number(e.target.value)}, 's-msg'));
+el('s-site-apply').addEventListener('click', () => postSettings({
+  altitude_m: Number(el('s-alt').value),
+  latitude: Number(el('s-lat').value),
+  longitude: Number(el('s-lon').value)}, 's-msg'));
+
+async function maint(url, label, node) {
+  el(node).innerHTML = '<span class="text-amber-300">'+label+' running...</span>';
+  try {
+    const r = await fetch(url, {method:'POST'}).then(r=>r.json());
+    el(node).innerHTML = '<span class="text-emerald-300">'+label+': '+
+      (r.rows!==undefined ? r.rows+' rows in '+r.seconds+'s'
+       : r.trained!==undefined ? (r.trained ? 'trained '+(r.grid_rows||'')+' rows' : (r.reason||'skipped'))
+       : JSON.stringify(r).slice(0,70))+'</span>';
+  } catch (err) {
+    el(node).innerHTML = '<span class="text-rose-300">'+label+' failed</span>';
+  }
+}
+el('s-recompute').addEventListener('click', ()=>maint('/api/recompute','re-derive','s-maint'));
+el('s-retrain').addEventListener('click',   ()=>maint('/api/train','retrain','s-maint'));
+el('s-verify').addEventListener('click',    ()=>maint('/api/verify','score','s-maint'));
 
 /* ---------------- STATS FOR NERDS ---------------- */
 let nerdDoc = null, nerdHead = null;

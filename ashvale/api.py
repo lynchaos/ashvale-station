@@ -34,7 +34,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config import CONFIG
+from .config import CONFIG, load_overrides, save_overrides
 from .dashboard import DASHBOARD_HTML
 from .features import FEATURE_NAMES
 from .led import LedDisplay
@@ -126,6 +126,19 @@ class CalibrationIn(BaseModel):
     reference_c: Optional[float] = Field(None, description="Trusted air temperature in C")
     reset: bool = Field(False, description="Discard the learned coefficient and its "
                                            "covariance, returning to the configured prior")
+
+
+class SettingsIn(BaseModel):
+    """Every field optional: the UI sends only what changed."""
+    environment: Optional[str] = None
+    enclosure: Optional[str] = None
+    note: str = ""
+    altitude_m: Optional[float] = Field(None, ge=-430, le=9000)
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    hum_psychrometric: Optional[bool] = None
+    led_enabled: Optional[bool] = None
+    led_fps: Optional[float] = Field(None, ge=4, le=30)
 
 
 class EnvironmentIn(BaseModel):
@@ -622,6 +635,94 @@ def environment(body: EnvironmentIn) -> Dict:
     if not body.environment and not body.enclosure:
         raise HTTPException(422, "provide environment, enclosure, or both")
     return _clean(_st().set_environment(body.environment, body.enclosure, body.note))
+
+
+@app.get("/api/settings")
+def get_settings() -> Dict:
+    st = _st()
+    return _clean({
+        "site": {"environment": CONFIG.site.environment,
+                 "enclosure": CONFIG.site.enclosure,
+                 "altitude_m": CONFIG.site.altitude_m,
+                 "latitude": CONFIG.site.latitude,
+                 "longitude": CONFIG.site.longitude,
+                 "timezone": CONFIG.site.timezone,
+                 "name": CONFIG.site.name},
+        "sensor": {"hum_psychrometric": CONFIG.sensor.hum_psychrometric,
+                   "cpu_heat_k": round(st.tracker.compensator.k, 4),
+                   "hum_offset": round(st.tracker.hum_compensator.offset, 3)},
+        "server": {"led_enabled": CONFIG.server.led_enabled,
+                   "led_fps": CONFIG.server.led_fps},
+        "options": {
+            "environment": ["indoor", "sheltered", "outdoor"],
+            "enclosure": ["closed", "ventilated", "open"],
+        },
+        "overrides": load_overrides(CONFIG),
+    })
+
+
+@app.post("/api/settings")
+def post_settings(body: SettingsIn) -> Dict:
+    """Apply settings live and persist them to the overlay.
+
+    Everything here takes effect without a restart, because a settings page that
+    needs one is a settings page people stop trusting. Site geometry is read per
+    sample, the compensator flag is a field on a live object, and the display
+    reads its own rate each frame.
+    """
+    st = _st()
+    patch: Dict[str, Dict] = {}
+    applied, needs_recompute = [], False
+
+    if body.environment or body.enclosure:
+        r = st.set_environment(body.environment, body.enclosure, body.note)
+        if r.get("changed"):
+            applied.append(r["detail"])
+            patch.setdefault("site", {}).update(
+                {"environment": CONFIG.site.environment,
+                 "enclosure": CONFIG.site.enclosure})
+
+    for name, value in (("altitude_m", body.altitude_m),
+                        ("latitude", body.latitude),
+                        ("longitude", body.longitude)):
+        if value is not None and value != getattr(CONFIG.site, name):
+            applied.append(f"{name} {getattr(CONFIG.site, name)} -> {value}")
+            setattr(CONFIG.site, name, float(value))
+            patch.setdefault("site", {})[name] = float(value)
+            # Altitude feeds the sea-level reduction on every stored row, so the
+            # history is now inconsistent with the new value until re-derived.
+            needs_recompute = needs_recompute or name == "altitude_m"
+
+    if body.hum_psychrometric is not None and \
+            body.hum_psychrometric != CONFIG.sensor.hum_psychrometric:
+        CONFIG.sensor.hum_psychrometric = bool(body.hum_psychrometric)
+        st.tracker.hum_compensator.psychrometric = bool(body.hum_psychrometric)
+        patch.setdefault("sensor", {})["hum_psychrometric"] = bool(body.hum_psychrometric)
+        applied.append(f"psychrometric correction {'on' if body.hum_psychrometric else 'off'}")
+        needs_recompute = True
+
+    if body.led_enabled is not None and body.led_enabled != CONFIG.server.led_enabled:
+        CONFIG.server.led_enabled = bool(body.led_enabled)
+        patch.setdefault("server", {})["led_enabled"] = bool(body.led_enabled)
+        if display is not None:
+            display.enabled = bool(body.led_enabled)
+            if not body.led_enabled:
+                st.board.clear()
+        applied.append(f"matrix {'on' if body.led_enabled else 'off'}")
+
+    if body.led_fps is not None and body.led_fps != CONFIG.server.led_fps:
+        CONFIG.server.led_fps = float(body.led_fps)
+        patch.setdefault("server", {})["led_fps"] = float(body.led_fps)
+        if display is not None:
+            display.fps = float(body.led_fps)
+        applied.append(f"matrix {body.led_fps:g} fps")
+
+    if patch:
+        save_overrides(CONFIG, patch)
+        st.store.log_event("settings", "info", "; ".join(applied))
+
+    return _clean({"applied": applied, "changed": bool(applied),
+                   "needs_recompute": needs_recompute})
 
 
 @app.get("/api/status")

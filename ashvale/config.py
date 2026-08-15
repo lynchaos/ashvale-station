@@ -21,6 +21,7 @@ variables prefixed `ASHVALE_` (e.g. `ASHVALE_SITE__ALTITUDE_M=42`).
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
@@ -175,6 +176,45 @@ def _apply_env(obj: Any, prefix: str = "ASHVALE_") -> None:
                 setattr(obj, f.name, raw)
 
 
+# Settings changed from the dashboard land here, not in config.yaml. That file
+# is hand-annotated and hand-edited per station, and rewriting it from an API
+# would destroy the comments and risk clobbering something the owner set. A
+# separate overlay keeps both: the file stays yours, the UI stays useful, and
+# either can be reverted independently by deleting the other.
+OVERRIDES_NAME = "settings.json"
+
+
+def overrides_path(cfg: "Config") -> Path:
+    return Path(cfg.storage.state_dir) / OVERRIDES_NAME
+
+
+def load_overrides(cfg: "Config") -> Dict[str, Any]:
+    path = overrides_path(cfg)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_overrides(cfg: "Config", patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge a patch into the overlay and write it back."""
+    current = load_overrides(cfg)
+    for section, values in patch.items():
+        if not isinstance(values, dict):
+            continue
+        current.setdefault(section, {}).update(values)
+    path = overrides_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(current, fh, indent=2, sort_keys=True)
+    tmp.replace(path)                       # atomic, so a crash cannot truncate it
+    return current
+
+
 def load_config(path: str | os.PathLike | None = None) -> Config:
     cfg = Config()
     candidate = Path(path) if path else REPO_ROOT / "config.yaml"
@@ -182,6 +222,11 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         with open(candidate, "r", encoding="utf-8") as fh:
             _apply(cfg, yaml.safe_load(fh) or {})
     _apply_env(cfg)
+    # Applied last: a change made from the dashboard is the most recent explicit
+    # instruction from a human, so it wins over both the file and the
+    # environment. Delete data/state/settings.json to fall back.
+    Path(cfg.storage.state_dir).mkdir(parents=True, exist_ok=True)
+    _apply(cfg, load_overrides(cfg))
     Path(cfg.storage.db_path).parent.mkdir(parents=True, exist_ok=True)
     Path(cfg.storage.state_dir).mkdir(parents=True, exist_ok=True)
     return cfg
