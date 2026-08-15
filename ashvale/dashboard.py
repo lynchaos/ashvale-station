@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The dashboard: five tabs, one viewport, no scrolling.
+"""The dashboard: five tabs in the header, one viewport, no scrolling.
 
 Layout contract. The page is a fixed three-row grid pinned to the
 viewport height: header, tab bar, then a content region that takes the
@@ -94,10 +94,13 @@ DASHBOARD_HTML = r"""
   <div class="absolute bottom-10 left-10 w-[400px] h-[400px] bg-amber-600/10 rounded-full blur-[100px]"></div>
 </div>
 
-<div id="shell" class="max-w-[1600px] mx-auto px-3 sm:px-5 py-3 grid grid-rows-[auto_auto_1fr] gap-3 min-h-0">
+<div id="shell" class="max-w-[1600px] mx-auto px-3 sm:px-5 py-3 grid grid-rows-[auto_1fr] gap-3 min-h-0">
 
-  <header class="glass rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
-    <div class="flex items-center gap-3">
+  <!-- Tabs live in the header rather than a row of their own. That row cost about
+       70 px of vertical space on every tab for five buttons, which is a poor
+       trade on a layout that refuses to scroll. -->
+  <header class="glass rounded-2xl px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+    <div class="flex items-center gap-3 shrink-0">
       <div class="p-2 bg-gradient-to-tr from-indigo-500/20 to-emerald-500/20 border border-white/10 rounded-xl">
         <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
@@ -111,7 +114,15 @@ DASHBOARD_HTML = r"""
         </p>
       </div>
     </div>
-    <div class="flex items-center gap-2 font-mono text-[11px]">
+    <nav role="tablist" class="flex gap-1 flex-1 min-w-0 overflow-x-auto justify-center">
+      <button role="tab" data-tab="live"     aria-selected="true"  class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Live</button>
+      <button role="tab" data-tab="history"  aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">History</button>
+      <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models and Calibration</button>
+      <button role="tab" data-tab="nerd"     aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Stats for Nerds</button>
+      <button role="tab" data-tab="methods"  aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Methods</button>
+    </nav>
+
+    <div class="flex items-center gap-2 font-mono text-[11px] shrink-0">
       <span id="hd-health" class="px-2 py-1 rounded-lg border bg-slate-500/15 text-slate-300 border-slate-500/20 uppercase font-semibold">health</span>
       <span class="flex items-center gap-1.5 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800">
         <span id="hd-pulse" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -120,13 +131,6 @@ DASHBOARD_HTML = r"""
     </div>
   </header>
 
-  <nav role="tablist" class="glass rounded-2xl p-1.5 flex gap-1.5 overflow-x-auto">
-    <button role="tab" data-tab="live"     aria-selected="true"  class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Live</button>
-    <button role="tab" data-tab="history"  aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">History</button>
-    <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models and Calibration</button>
-    <button role="tab" data-tab="nerd"     aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Stats for Nerds</button>
-    <button role="tab" data-tab="methods"  aria-selected="false" class="tabbtn shrink-0 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 border border-transparent hover:text-slate-200">Methods</button>
-  </nav>
 
   <main class="min-h-0">
 
@@ -256,8 +260,8 @@ DASHBOARD_HTML = r"""
             <span class="text-[10px] text-slate-500 font-mono">pressure, last 24 h</span>
             <span id="c-tend" class="text-[10px] text-violet-300 font-mono">--</span>
           </div>
-          <div class="h-14 relative"><canvas id="tendChart"></canvas></div>
-          <p class="text-[9px] text-slate-600 font-mono mt-1 leading-snug">The only signal that sees past your walls. Its slope drives the forecast.</p>
+          <div class="h-20 relative"><canvas id="tendChart"></canvas></div>
+          <p class="text-[9px] text-slate-600 font-mono mt-0.5 leading-none">Slope, not level, drives the forecast.</p>
         </div>
       </div>
     </div>
@@ -606,7 +610,7 @@ function applyPrecip(p) {
   // decide which glyph honestly represents it.
   const wx = wxPick(p.condition, lastDerived.cloud_index, lastDerived.solar_elevation,
                     lastDerived.temperature, p.rain_probability);
-  el('c-icon').innerHTML = wxSvg(wx[0], 56);
+  el('c-icon').innerHTML = wxSvg(wx[0], 44);
   el('c-sky').innerText = wx[1];
   el('c-z').innerText = p.zambretti_z!==undefined ? p.zambretti_z : '-';
   el('c-trend').innerText = p.pressure_characteristic||'-';
@@ -663,9 +667,24 @@ charts.tend = new Chart(el('tendChart').getContext('2d'), {
   data:{ datasets:[{ data:[], borderColor:'#a78bfa', backgroundColor:'rgba(167,139,250,.12)',
     fill:true, borderWidth:1.6, pointRadius:0, tension:.3, parsing:false }] },
   options:{ responsive:true, maintainAspectRatio:false, animation:false,
-    scales:{ x:{ type:'linear', grid:{display:false}, ticks:{ color:'#475569', font:{family:'JetBrains Mono',size:8}, maxTicksLimit:4,
-        callback:v=>new Date(v*1000).toLocaleTimeString([], {hour:'2-digit'}) } },
-      y:{ grid:{color:GRID}, ticks:{ color:'#a78bfa', font:{family:'JetBrains Mono',size:8}, maxTicksLimit:4, callback:v=>v.toFixed(0) } } },
+    // Chart.js lays the tick row out inside the canvas. At the old 56 px there
+    // was not enough of it left, so the labels crowded the edge and the caption
+    // spilled past the card. The layout padding reserves that strip explicitly.
+    layout:{ padding:{ bottom:2, left:2, right:4 } },
+    scales:{ x:{ type:'linear', grid:{display:false},
+        ticks:{ color:'#64748b', font:{family:'JetBrains Mono',size:9}, maxTicksLimit:4,
+        maxRotation:0, minRotation:0, padding:2,
+        // Hour-only labels collapse to three identical ticks when the window is
+        // short, which happens on a young station. Add minutes below six hours.
+        callback:function (v) {
+          const sc = this.chart.scales.x;
+          const span = (sc.max - sc.min) || 0;
+          const opts = span > 6 * 3600
+            ? {hour: '2-digit'}
+            : {hour: '2-digit', minute: '2-digit'};
+          return new Date(v * 1000).toLocaleTimeString([], opts);
+        } } },
+      y:{ grid:{color:GRID}, ticks:{ color:'#a78bfa', font:{family:'JetBrains Mono',size:9}, maxTicksLimit:4, padding:2, callback:v=>v.toFixed(0) } } },
     plugins:{ legend:{display:false}, tooltip:{ backgroundColor:'rgba(15,23,42,.95)', titleFont:MONO,
       callbacks:{ title:i=>tsFmt(i[0].parsed.x) } } } }
 });
