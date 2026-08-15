@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .rls import RecursiveLeastSquares, AdaptiveConformal
-from .nowcast import NowcastEnsemble
-from .climatology import HarmonicClimatology
-from .precip import PrecipitationModel, zambretti
 from .anomaly import AnomalyMonitor
+from .climatology import HarmonicClimatology
+from .nowcast import NowcastEnsemble
+from .precip import PrecipitationModel, zambretti
+from .rls import AdaptiveConformal, RecursiveLeastSquares
 
 __all__ = [
     "RecursiveLeastSquares", "AdaptiveConformal", "NowcastEnsemble",

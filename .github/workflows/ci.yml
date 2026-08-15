@@ -29,6 +29,11 @@ jobs:
           pip install -r requirements.txt
           pip install httpx
 
+      - name: Lint
+        run: |
+          pip install ruff
+          ruff check .
+
       - name: Byte-compile every module
         run: python -m compileall -q ashvale scripts run.py
 

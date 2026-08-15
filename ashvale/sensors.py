@@ -25,7 +25,6 @@ same code to the Pi unchanged.
 from __future__ import annotations
 
 import math
-import random
 import time
 from typing import Any, Dict, Optional
 

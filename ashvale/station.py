@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -44,7 +43,7 @@ import numpy as np
 from . import physics
 from .config import Config
 from .estimation import SignalTracker
-from .features import N_FEATURES, build_features
+from .features import build_features
 from .models.anomaly import AnomalyMonitor
 from .models.climatology import HarmonicClimatology
 from .models.nowcast import NowcastEnsemble

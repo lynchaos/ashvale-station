@@ -77,5 +77,8 @@ line-length = 100
 target-version = "py39"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B"]
+# UP is deliberately absent. With target-version = "py39" it fights the
+# `from __future__ import annotations` style used throughout and generates
+# several hundred findings for no behavioural gain. B currently finds nothing.
+select = ["E", "F", "W", "I"]
 ignore = ["E501"]

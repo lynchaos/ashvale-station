@@ -141,9 +141,9 @@ class HarmonicClimatology:
         sigma0 = self.resid_std.get(target, 1.0)
         sigma = sigma0 * np.sqrt(1.0 + lead_h / 24.0)
         return [
-            {"ts": float(t), "lead_h": float(l), "mu": float(m),
+            {"ts": float(t), "lead_h": float(lh), "mu": float(m),
              "lo": float(m - 1.645 * s), "hi": float(m + 1.645 * s)}
-            for t, l, m, s in zip(grid, lead_h, mu, sigma)
+            for t, lh, m, s in zip(grid, lead_h, mu, sigma)
         ]
 
     def anomaly_now(self, target: str, ts: float, observed: float) -> float:

@@ -47,11 +47,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ashvale.config import load_config                    # noqa: E402
-from ashvale.features import build_features               # noqa: E402
+from ashvale.config import load_config  # noqa: E402
+from ashvale.features import build_features  # noqa: E402
 from ashvale.models.climatology import HarmonicClimatology  # noqa: E402
-from ashvale.models.nowcast import NowcastEnsemble        # noqa: E402
-from ashvale.storage import Store, resample               # noqa: E402
+from ashvale.models.nowcast import NowcastEnsemble  # noqa: E402
+from ashvale.storage import Store, resample  # noqa: E402
 
 
 def horizon_label(seconds: int) -> str:
@@ -163,7 +163,9 @@ def main() -> None:
                   f"{r['bias']:>+8.3f}   {r['weights']}{flag}")
         print()
 
-    print(f"units: temperature C, humidity %, pressure hPa")
+    # Driven off the dict rather than hardcoded, so adding a target cannot leave
+    # the units line silently describing the wrong columns.
+    print("units: " + ", ".join(f"{t} {units[t]}" for t in cfg.model.targets if t in units))
     print("coverage should sit near 90% if the conformal calibration is honest.")
 
 

@@ -32,8 +32,14 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from .physics import (absolute_humidity, clear_sky_irradiance, dew_point,
-                      solar_position, vapour_pressure_deficit, wet_bulb)
+from .physics import (
+    absolute_humidity,
+    clear_sky_irradiance,
+    dew_point,
+    solar_position,
+    vapour_pressure_deficit,
+    wet_bulb,
+)
 
 FEATURE_NAMES: List[str] = [
     "bias",

@@ -34,8 +34,7 @@ matters.
 from __future__ import annotations
 
 import asyncio
-import time
-from typing import Dict, List, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 OFF = (0, 0, 0)
 
