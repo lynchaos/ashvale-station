@@ -259,12 +259,30 @@ DASHBOARD_HTML = r"""
      and the tendency chart. At 1280x800 it needed 351 px into 267, so it
      clipped its own chart. Same treatment as the stat cards: give the height
      back by shrinking the furniture, not by hiding the reading. */
+  /* The nerd tab's two dense panels grow with accumulated history: 18 learner
+     rows and a detector column whose coefficient list lengthens as labels come
+     in. Both silently spilled past their cards on a 13 inch screen. Tightening
+     the line box is worth more here than any font change, because these are
+     one-line-per-fact tables. */
   @media (min-width:1024px) and (max-height:920px) {
+    #n-heads table td, #n-heads table th { padding-top:0; padding-bottom:0; line-height:1.25; }
+    #n-heads table { font-size:9px; }
+    #n-rel { row-gap:0; }
+    #n-theta > div { line-height:1.3; }
     .cond-cap { display:none; }
     .cond-icon svg { width:36px; height:36px; }
     .cond-label { padding:0.35rem 0.5rem; }
   }
   @media (min-width:1024px) and (max-height:830px) {
+    /* The tendency chart's floor is what overflows once everything above it has
+       already been trimmed: a hard 42 px min-height cannot flex, so it pushes
+       13 px past the card at 1024x768. Lower the floor rather than removing it,
+       so the chart stays a chart. */
+    /* html prefix for specificity: the Tailwind CDN injects its sheet after this
+       block, so min-h-[42px] wins at equal weight and the override did nothing. */
+    html .cond-tend { min-height:26px; }
+    /* Attribution rows overshot by 4 px, which one notch of leading covers. */
+    #n-theta > div { line-height:1.15; }
     .cond-icon svg { width:30px; height:30px; }
     /* 1366x768 is the most common laptop resolution in the world, so it has to
        fit rather than nearly fit. These four give back about 36 px. */
@@ -625,7 +643,10 @@ DASHBOARD_HTML = r"""
     </div>
 
     <div class="glass rounded-2xl p-4 lg:col-span-4 flex flex-col min-h-0 overflow-hidden">
-      <h2 class="text-sm font-bold mb-2 shrink-0">Station log</h2>
+      <div class="flex items-baseline justify-between mb-2 shrink-0">
+        <h2 class="text-sm font-bold">Station log</h2>
+        <span id="m-log-more" class="text-[9px] font-mono text-slate-600"></span>
+      </div>
       <div id="m-log" class="flex-1 min-h-0 overflow-hidden space-y-1 font-mono text-[10px]"></div>
     </div>
   </section>
@@ -1344,12 +1365,17 @@ async function loadModels() {
     (c.weight>=0?'bg-emerald-500':'bg-rose-500')+'" style="width:'+(Math.abs(c.weight)/mx*100)+'%"></div></div>'+
     '<span class="w-10 text-right text-slate-500 text-[9px]">'+c.weight.toFixed(2)+'</span></div>').join('');
 
-  el('m-log').innerHTML = (st.events||[]).map(e=>
-    '<div class="flex gap-2 border-b border-slate-800/40 pb-1">'+
-    '<span class="text-slate-700 shrink-0">'+new Date(e.ts*1000).toLocaleTimeString()+'</span>'+
-    '<span class="text-slate-600 shrink-0 w-16">'+e.kind+'</span>'+
-    '<span class="'+(SEV[e.severity]||'text-slate-400')+'">'+e.detail+'</span></div>').join('')
-    || '<span class="text-slate-700">Nothing logged yet.</span>';
+  // The card is overflow-hidden, so anything past its height was simply
+  // invisible: measured, up to 299 px of entries were being silently discarded
+  // at 1280x800. Render what fits and say how many are not shown, rather than
+  // pretending the list ends there.
+  // Rendered through a ResizeObserver rather than once. Measuring at call time
+  // gets a stale clientHeight: the pane has only just become visible and
+  // Chart.js resizes its siblings 40 ms later, which measured 13 rows into a box
+  // that ends up fitting 10. Observing the box means it also re-fits on window
+  // resize and on a theme change, with no timers to guess at.
+  logEvents = st.events || [];
+  trimLog();
 
   const an = await fetch('/api/anomaly').then(r=>r.json());
   el('e-health').innerHTML = Object.keys(an.health||{}).map(k=>{
@@ -1619,7 +1645,7 @@ async function loadNerd() {
       '<div class="flex justify-between text-slate-600">&sigma; '+k.slice(0,4)+'<span>'+fmt(cl.residual_std[k],3)+'</span></div>').join('');
 
   const pr = d.precipitation||{};
-  const co = (pr.coefficients||[]).slice().sort((a,b)=>Math.abs(b.weight)-Math.abs(a.weight)).slice(0,4);
+  const co = (pr.coefficients||[]).slice().sort((a,b)=>Math.abs(b.weight)-Math.abs(a.weight)).slice(0,3);
   el('n-precip').innerHTML =
     '<div class="flex justify-between text-slate-500">labels<span class="text-slate-300">'+(pr.strong_labels||0)+' strong, '+(pr.weak_labels||0)+' weak</span></div>'+
     '<div class="flex justify-between text-slate-500">logloss<span class="text-slate-300">'+fmt(pr.logloss_ewma,4)+'</span></div>'+
@@ -1691,6 +1717,41 @@ function wxPick(condition, cloud, elevation, tempC, rainProb) {
 }
 function wxSvg(name, size) {
   return '<svg viewBox="0 0 64 64" width="'+size+'" height="'+size+'" aria-hidden="true">'+(WX[name]||WX.cloud)+'</svg>';
+}
+
+/* ---------------- STATION LOG ---------------- */
+let logEvents = [];
+function trimLog() {
+  const box = el('m-log');
+  if (!box) return;
+  const rows = logEvents.map(e =>
+    '<div class="flex gap-2 border-b border-slate-800/40 pb-1">'+
+    '<span class="text-slate-700 shrink-0">'+new Date(e.ts*1000).toLocaleTimeString()+'</span>'+
+    '<span class="text-slate-600 shrink-0 w-16">'+e.kind+'</span>'+
+    '<span class="'+(SEV[e.severity]||'text-slate-400')+'">'+e.detail+'</span></div>');
+  if (!rows.length) {
+    box.innerHTML = '<span class="text-slate-700">Nothing logged yet.</span>';
+    el('m-log-more').innerText = ''; return;
+  }
+  // Binary search the count that fits. A divide-by-assumed-row-height still
+  // overflowed by 26 px, because a long detail line wraps to two lines and no
+  // constant knows that.
+  const fit = n => { box.innerHTML = rows.slice(0, n).join('');
+                     return box.scrollHeight <= box.clientHeight + 1; };
+  let shown = rows.length;
+  if (box.clientHeight > 0 && !fit(rows.length)) {
+    let lo = 0, hi = rows.length;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fit(mid)) lo = mid; else hi = mid - 1; }
+    shown = lo;
+    box.innerHTML = rows.slice(0, shown).join('');
+  }
+  el('m-log-more').innerText = rows.length > shown
+    ? (rows.length - shown) + ' older not shown \u00b7 GET /api/events' : '';
+}
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(() => trimLog());
+  const box = el('m-log');
+  if (box) ro.observe(box);
 }
 
 /* ---------------- METHODS ---------------- */
