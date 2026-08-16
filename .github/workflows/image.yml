@@ -51,10 +51,30 @@ jobs:
             quilt parted coreutils qemu-user-binfmt debootstrap zerofree zip \
             dosfstools e2fsprogs libcap2-bin libarchive-tools grep rsync \
             xz-utils curl xxd file git kmod bc gpg pigz arch-test
-          # Prove the handler is actually registered before spending an hour.
-          test -f /proc/sys/fs/binfmt_misc/qemu-aarch64 \
-            || sudo systemctl restart systemd-binfmt || true
-          ls /proc/sys/fs/binfmt_misc/ | head
+          # qemu-user-static too: qemu-user-binfmt registers a dynamically linked
+          # emulator, which cannot run once debootstrap chroots into a rootfs
+          # that has no loader for it. That fails as "E: Unable to execute
+          # target architecture" several steps later.
+          sudo apt-get install -y --no-install-recommends qemu-user-static binfmt-support
+
+      # Registers the static handlers with the F flag, which preloads the
+      # emulator so it survives the chroot. Run after apt, because installing
+      # binfmt-support re-registers the dynamic handlers over the top.
+      - name: Register qemu binfmt handlers
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Verify the aarch64 handler is usable in a chroot
+        run: |
+          F=/proc/sys/fs/binfmt_misc/qemu-aarch64
+          test -f "$F" || { echo "no aarch64 binfmt handler registered"; exit 1; }
+          cat "$F"
+          # The F flag is the whole point: without it the interpreter is resolved
+          # inside the chroot, where it does not exist.
+          grep -q 'flags:.*F' "$F" || { echo "handler lacks the F flag; chroot will fail"; exit 1; }
+          echo "aarch64 handler OK"
+
 
       # Pinned to a commit, not a branch. An image other people flash should not
       # change because an upstream branch moved between builds.
