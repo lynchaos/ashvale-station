@@ -43,10 +43,18 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
+          # Taken from pi-gen's own `depends` file at the pinned commit rather
+          # than guessed. My first attempt installed qemu-user-static, and
+          # pi-gen wants qemu-user-binfmt: it checks for the binfmt handler, not
+          # the emulator binary, and failed in under a second.
           sudo apt-get install -y --no-install-recommends \
-            coreutils quilt parted qemu-user-static debootstrap zerofree zip \
-            dosfstools libarchive-tools libcap2-bin grep rsync xz-utils file \
-            git curl bc gpg pigz kpartx arch-test
+            quilt parted coreutils qemu-user-binfmt debootstrap zerofree zip \
+            dosfstools e2fsprogs libcap2-bin libarchive-tools grep rsync \
+            xz-utils curl xxd file git kmod bc gpg pigz arch-test
+          # Prove the handler is actually registered before spending an hour.
+          test -f /proc/sys/fs/binfmt_misc/qemu-aarch64 \
+            || sudo systemctl restart systemd-binfmt || true
+          ls /proc/sys/fs/binfmt_misc/ | head
 
       # Pinned to a commit, not a branch. An image other people flash should not
       # change because an upstream branch moved between builds.
