@@ -1,0 +1,5 @@
+python3-venv
+python3-numpy
+python3-smbus2
+sense-hat
+sqlite3

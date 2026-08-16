@@ -1,0 +1,24 @@
+#!/bin/bash
+# Runs once, before the station starts. Everything here is deliberately absent
+# from the image itself, because baking it in would mean every person who
+# flashed this card shared the same secrets or the same location.
+set -e
+STATE=/opt/ashvale/data
+CONF=/opt/ashvale/config.yaml
+UID_MAIN=$(getent passwd 1000 | cut -d: -f1)
+
+install -d -o 1000 -g 1000 "$STATE" "$STATE/state"
+
+# Site coordinates default to Greenwich, not to the author's house. They are
+# wrong for everyone, which is the point: the Methods tab and the sea-level
+# reduction both depend on them, so they should be conspicuously wrong until set.
+if [ -f "$CONF" ] && ! grep -q 'ASHVALE_FIRSTBOOT_DONE' "$CONF"; then
+	sed -i 's/^\( *latitude:\).*/\1 51.4779    # CHANGE ME: Settings tab or this file/' "$CONF"
+	sed -i 's/^\( *longitude:\).*/\1 0.0015     # CHANGE ME/' "$CONF"
+	sed -i 's/^\( *altitude_m:\).*/\1 0.0      # CHANGE ME: wrong altitude skews sea-level pressure/' "$CONF"
+	echo "# ASHVALE_FIRSTBOOT_DONE" >> "$CONF"
+	chown 1000:1000 "$CONF"
+fi
+
+logger -t ashvale-firstboot "prepared state for user ${UID_MAIN:-uid1000}"
+systemctl disable ashvale-firstboot.service || true

@@ -1,0 +1,110 @@
+name: Pi image
+
+# Builds a ready-to-flash Raspberry Pi OS Lite image with Ashvale Station
+# preinstalled, and attaches it to a GitHub Release.
+#
+# Built in CI rather than on a laptop on purpose. The artifact is something
+# other people flash onto their own hardware, so it should be reproducible from
+# a public log by anyone who wants to check what went into it, rather than
+# appearing from a machine only I can see.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the image to a release"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out Ashvale
+        uses: actions/checkout@v4
+        with:
+          path: ashvale
+
+      # pi-gen needs about 10 GB and a stock runner does not have it spare.
+      - name: Reclaim disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h / | tail -1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            coreutils quilt parted qemu-user-static debootstrap zerofree zip \
+            dosfstools libarchive-tools libcap2-bin grep rsync xz-utils file \
+            git curl bc gpg pigz kpartx arch-test
+
+      # Pinned to a commit, not a branch. An image other people flash should not
+      # change because an upstream branch moved between builds.
+      - name: Check out pi-gen
+        uses: actions/checkout@v4
+        with:
+          repository: RPi-Distro/pi-gen
+          ref: ca8aeed0ae300c2a89f55ce9617d5f96a27e99e5   # arm64 branch, pinned
+          path: pi-gen
+          fetch-depth: 1
+
+      - name: Assemble the custom stage
+        run: |
+          cp ashvale/deploy/pi-image/config pi-gen/config
+          cp -r ashvale/deploy/pi-image/stage-ashvale pi-gen/stage-ashvale
+          # Lite only: everything from stage3 up is the desktop.
+          touch pi-gen/stage3/SKIP pi-gen/stage4/SKIP pi-gen/stage5/SKIP
+          touch pi-gen/stage4/SKIP_IMAGES pi-gen/stage5/SKIP_IMAGES
+          # stage2 stops exporting so ours is the only image produced.
+          rm -f pi-gen/stage2/EXPORT_IMAGE
+          echo "ASHVALE_SRC=${GITHUB_WORKSPACE}/ashvale" >> pi-gen/config
+          echo "--- config ---" && cat pi-gen/config
+
+      - name: Build
+        working-directory: pi-gen
+        run: sudo -E ./build.sh
+
+      - name: Collect artifact
+        id: artifact
+        run: |
+          IMG=$(find pi-gen/deploy -name '*.img.xz' | head -1)
+          test -n "$IMG" || { echo "no image produced"; ls -R pi-gen/deploy; exit 1; }
+          mkdir -p out && mv "$IMG" out/
+          cd out
+          NAME=$(basename *.img.xz)
+          sha256sum "$NAME" > "$NAME.sha256"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          ls -lh
+          # A release asset is capped at 2 GB; Lite compresses to well under that,
+          # but fail loudly here rather than at upload time.
+          SIZE=$(stat -c%s "$NAME")
+          echo "compressed size: $((SIZE/1024/1024)) MiB"
+          test "$SIZE" -lt 2000000000 || { echo "image exceeds the 2 GB release limit"; exit 1; }
+
+      - name: Upload as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ashvale-pi-image
+          path: out/*
+          retention-days: 14
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                 --title "$TAG" --notes "Ashvale Station image for Raspberry Pi."
+          gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber

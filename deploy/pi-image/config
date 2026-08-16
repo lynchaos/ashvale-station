@@ -1,0 +1,26 @@
+# pi-gen configuration for the Ashvale Station image.
+#
+# Built on Raspberry Pi OS Lite (Trixie, arm64), which is what a Zero 2 W
+# actually runs: aarch64, Debian 13. Lite because the station is headless and a
+# desktop would eat the 512 MB budget the whole project is built around.
+#
+# Nothing secret belongs in this file. No password, no WiFi, no SSH host keys.
+# The first two are supplied by the user in Raspberry Pi Imager, and the third
+# is generated on first boot: an image with baked host keys gives every user
+# the same key and makes them trivially impersonable on their own network.
+
+IMG_NAME=ashvale-station
+RELEASE=trixie
+# ARCH is not set here: the arm64 branch of pi-gen exports it unconditionally,
+# so a value here would be silently ignored and imply a choice that is not ours.
+
+# Lite only. stage3 and up add the desktop.
+STAGE_LIST="stage0 stage1 stage2 stage-ashvale"
+
+# No default user. Raspberry Pi OS refuses to boot to a login without one, which
+# is deliberate: it forces the person flashing the card to choose credentials in
+# Imager rather than inheriting ours.
+DISABLE_FIRST_BOOT_USER_RENAME=0
+
+DEPLOY_COMPRESSION=xz
+COMPRESSION_LEVEL=6

@@ -1,0 +1,13 @@
+[Unit]
+Description=Ashvale Station first-boot preparation
+After=local-fs.target
+Before=ashvale.service
+ConditionPathExists=!/opt/ashvale/data/state
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ashvale-firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

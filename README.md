@@ -131,6 +131,22 @@ after a fortnight of real data and believe those instead.
 
 ---
 
+## Getting it onto a Pi
+
+Already have a working Raspberry Pi:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lynchaos/ashvale-station/main/deploy/install.sh | sudo bash
+```
+
+Blank SD card: download the prebuilt Raspberry Pi OS Lite (Trixie, arm64) image
+from [Releases](https://github.com/lynchaos/ashvale-station/releases), verify the
+checksum, and flash it with Raspberry Pi Imager, setting your own username,
+password and WiFi in the customisation dialog. The image carries no credentials
+and no SSH host keys: those are generated on first boot.
+
+Either way, see [deploy/README.md](deploy/README.md).
+
 ## Install on the Pi
 
 ```bash
