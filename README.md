@@ -165,7 +165,11 @@ become a dropdown and the page scrolls, because pinning six panels into a phone
 viewport produces unreadable eight-pixel type. The same release applies below
 700 px tall: a short screen gets a scrollbar rather than a one-pixel chart.
 
-Verified across ten viewports from 1920x1080 to 375x667, six tabs each.
+Light and dark themes, defaulting to your system setting, switchable from the
+header or the Settings tab and remembered per browser.
+
+Verified across ten viewports from 1920x1080 to 375x667, six tabs each, in
+both themes.
 
 | Tab | Answers |
 | --- | --- |

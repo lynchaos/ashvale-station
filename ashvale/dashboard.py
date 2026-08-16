@@ -23,6 +23,13 @@ the height goes to the chart rather than the chrome. Below 1024 px wide the
 tab row becomes a native select, because six labels do not fit a phone header
 and a clipped tab strip is worse than a dropdown.
 
+Themes. The markup is dark-first Tailwind utilities, so rather than adding a
+dark: variant to several hundred class attributes, light is an overlay that
+remaps the slate scale and the accent hues under [data-theme="light"]. The
+dark path is untouched: nothing is re-specified unless the attribute is set.
+Charts cannot follow CSS, so they read the same tokens from the computed style
+and are re-rendered on a change.
+
 Layout contract. The page is a fixed three-row grid pinned to the
 viewport height: header, tab bar, then a content region that takes the
 remaining space and never overflows the fold. Each tab lays its panels
@@ -76,6 +83,128 @@ DASHBOARD_HTML = r"""
     box-shadow: 0 10px 30px -10px rgba(0,0,0,.5);
   }
   .tick { transition: width .5s cubic-bezier(.4,0,.2,1); }
+
+  /* ------------------------------------------------------------------ theme
+     The markup is written dark-first in Tailwind utilities, so rather than
+     adding a dark: variant to several hundred class attributes, the light theme
+     is an overlay that remaps the twenty-eight slate shades actually in use.
+     One place to reason about, and the dark path stays byte-identical to what
+     it was: nothing is re-specified unless [data-theme="light"] is set.
+
+     Charts cannot follow CSS, so they read these tokens from the computed style
+     and are re-rendered on a change. Same source of truth either way. */
+  :root {
+    --ink: #f1f5f9; --grid: rgba(255,255,255,.04);
+    --axis: #64748b; --axis-strong: #cbd5e1;
+    --tooltip: rgba(15,23,42,.95);
+  }
+  html { color-scheme: dark; }
+
+  html[data-theme="light"] { color-scheme: light; }
+  html[data-theme="light"] {
+    --ink: #0f172a; --grid: rgba(15,23,42,.07);
+    --axis: #64748b; --axis-strong: #334155;
+    --tooltip: rgba(255,255,255,.97);
+  }
+  html[data-theme="light"] body { background:#eef2f7; color:#0f172a; }
+  html[data-theme="light"] .glass {
+    background: radial-gradient(130% 130% at 50% 0%, rgba(255,255,255,.95) 0%, rgba(248,250,252,.92) 100%);
+    border: 1px solid rgba(15,23,42,.10);
+    box-shadow: 0 8px 24px -12px rgba(15,23,42,.20);
+  }
+  /* The decorative glows are tuned for a dark ground and turn to mud on white. */
+  html[data-theme="light"] .bg-blobs { opacity:.35; }
+
+  html[data-theme="light"] .text-slate-100 { color:#0f172a; }
+  html[data-theme="light"] .text-slate-200 { color:#1e293b; }
+  html[data-theme="light"] .text-slate-300 { color:#334155; }
+  html[data-theme="light"] .text-slate-400 { color:#475569; }
+  html[data-theme="light"] .text-slate-500 { color:#64748b; }
+  html[data-theme="light"] .text-slate-600 { color:#7c8aa0; }
+  html[data-theme="light"] .text-slate-700 { color:#94a3b8; }
+
+  html[data-theme="light"] .bg-slate-950,
+  html[data-theme="light"] .bg-slate-950\/90 { background-color:#f8fafc; }
+  html[data-theme="light"] .bg-slate-950\/70,
+  html[data-theme="light"] .bg-slate-950\/60 { background-color:rgba(255,255,255,.85); }
+  html[data-theme="light"] .bg-slate-900,
+  html[data-theme="light"] .bg-slate-900\/90,
+  html[data-theme="light"] .bg-slate-900\/80 { background-color:#f1f5f9; }
+  html[data-theme="light"] .bg-slate-900\/70,
+  html[data-theme="light"] .bg-slate-900\/60,
+  html[data-theme="light"] .bg-slate-900\/50,
+  html[data-theme="light"] .bg-slate-900\/40 { background-color:rgba(15,23,42,.045); }
+  html[data-theme="light"] .bg-slate-800,
+  html[data-theme="light"] .bg-slate-800\/60 { background-color:rgba(15,23,42,.08); }
+  html[data-theme="light"] .bg-slate-500\/15 { background-color:rgba(100,116,139,.14); }
+
+  html[data-theme="light"] .border-slate-700 { border-color:rgba(15,23,42,.20); }
+  html[data-theme="light"] .border-slate-800,
+  html[data-theme="light"] .border-slate-800\/80,
+  html[data-theme="light"] .border-slate-800\/70,
+  html[data-theme="light"] .border-slate-800\/60,
+  html[data-theme="light"] .border-slate-800\/40 { border-color:rgba(15,23,42,.11); }
+  html[data-theme="light"] .border-slate-500\/20 { border-color:rgba(100,116,139,.28); }
+
+  /* The station name is a gradient to transparent, which is invisible on white. */
+  html[data-theme="light"] h1.bg-clip-text {
+    background-image:linear-gradient(to right,#0f172a,#475569) !important;
+  }
+  html[data-theme="light"] input, html[data-theme="light"] select {
+    background-color:#fff; color:#0f172a; border-color:rgba(15,23,42,.18);
+  }
+  html[data-theme="light"] .scroller::-webkit-scrollbar-thumb { background:rgba(15,23,42,.22); }
+
+  /* Accents are the 200-400 shades, chosen to glow against black. On white they
+     wash out: measured against WCAG AA for small text, amber-300 on #f8fafc is
+     about 1.6:1. Each is remapped to the 600-700 shade of the same hue, which
+     keeps the colour coding intact and clears 4.5:1. */
+  /* Attribute matches, not exact class names. Tailwind's opacity variants are
+     separate classes (text-amber-200/60), and an exact-name list silently
+     missed every one of them: measured at 1.02:1 against white. Matching the
+     hue prefix catches all shades and all opacity suffixes, and dropping the
+     alpha is a gain here rather than a loss. */
+  html[data-theme="light"] [class*="text-amber-"] { color:#b45309; }
+  html[data-theme="light"] [class*="text-cyan-"] { color:#0e7490; }
+  html[data-theme="light"] [class*="text-violet-"] { color:#6d28d9; }
+  html[data-theme="light"] [class*="text-indigo-"] { color:#4338ca; }
+  html[data-theme="light"] [class*="text-emerald-"] { color:#047857; }
+  html[data-theme="light"] [class*="text-rose-"] { color:#be123c; }
+  html[data-theme="light"] [class*="text-blue-"] { color:#1d4ed8; }
+  html[data-theme="light"] [class*="text-sky-"] { color:#0369a1; }
+  html[data-theme="light"] .text-white { color:#0f172a; }
+  /* Tertiary labels are deliberately quiet, but slate-600/700 on white is
+     illegible rather than quiet. Lifted just enough to read. */
+  html[data-theme="light"] .text-slate-600 { color:#64748b; }
+  html[data-theme="light"] .text-slate-700 { color:#7c8aa0; }
+  /* The value-changed flash is a pale indigo picked to glow on black. On white
+     it drops a headline reading to 2.06:1 for half a second, which is exactly
+     when you are looking at it. */
+  html[data-theme="light"] .flash { animation:flash-light .5s ease-out; }
+  @keyframes flash-light { from { color:#4338ca; } to { color:inherit; } }
+
+  /* Tint backgrounds at 10-30% alpha vanish on white, taking their badges with
+     them. Lift the alpha and darken the border so a badge still reads as one. */
+  html[data-theme="light"] [class*="bg-amber-5"], html[data-theme="light"] [class*="bg-amber-6"]
+    { background-color:rgba(180,83,9,.13); }
+  html[data-theme="light"] [class*="bg-emerald-5"], html[data-theme="light"] [class*="bg-emerald-6"]
+    { background-color:rgba(4,120,87,.13); }
+  html[data-theme="light"] [class*="bg-indigo-5"], html[data-theme="light"] [class*="bg-indigo-6"]
+    { background-color:rgba(67,56,202,.13); }
+  html[data-theme="light"] [class*="bg-cyan-6"] { background-color:rgba(14,116,144,.13); }
+  html[data-theme="light"] [class*="bg-blue-6"] { background-color:rgba(29,78,216,.13); }
+  html[data-theme="light"] [class*="bg-rose-5"], html[data-theme="light"] [class*="bg-rose-6"]
+    { background-color:rgba(190,18,60,.13); }
+  html[data-theme="light"] [class*="border-amber-5"] { border-color:rgba(180,83,9,.35); }
+  html[data-theme="light"] [class*="border-emerald-5"] { border-color:rgba(4,120,87,.35); }
+  html[data-theme="light"] [class*="border-indigo-5"] { border-color:rgba(67,56,202,.35); }
+  html[data-theme="light"] [class*="border-cyan-5"] { border-color:rgba(14,116,144,.35); }
+  html[data-theme="light"] [class*="border-blue-5"] { border-color:rgba(29,78,216,.35); }
+  html[data-theme="light"] [class*="border-rose-5"] { border-color:rgba(190,18,60,.35); }
+
+  /* A little separation between the ground and the panels, or the cards float
+     on an identical white and the layout loses all structure. */
+  html[data-theme="light"] body.bg-slate-950 { background-color:#e8edf4; }
   .tabbtn { transition: all .18s ease; }
   .tabbtn[aria-selected="true"] {
     background: rgba(99,102,241,.16); color:#c7d2fe; border-color: rgba(99,102,241,.4);
@@ -157,7 +286,7 @@ DASHBOARD_HTML = r"""
 </head>
 <body class="bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
 
-<div class="fixed inset-0 pointer-events-none overflow-hidden -z-10">
+<div class="bg-blobs fixed inset-0 pointer-events-none overflow-hidden -z-10">
   <div class="absolute -top-32 left-1/4 w-[500px] h-[500px] bg-indigo-600/15 rounded-full blur-[120px]"></div>
   <div class="absolute top-1/3 -right-32 w-[500px] h-[500px] bg-emerald-600/10 rounded-full blur-[120px]"></div>
   <div class="absolute bottom-10 left-10 w-[400px] h-[400px] bg-amber-600/10 rounded-full blur-[100px]"></div>
@@ -212,6 +341,8 @@ DASHBOARD_HTML = r"""
     </nav>
 
     <div class="flex items-center gap-2 font-mono text-[11px] shrink-0">
+      <button id="theme-toggle" title="Switch theme" aria-label="Switch theme"
+              class="p-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-slate-200"></button>
       <span id="hd-health" class="px-2 py-1 rounded-lg border bg-slate-500/15 text-slate-300 border-slate-500/20 uppercase font-semibold">health</span>
       <span class="flex items-center gap-1.5 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800">
         <span id="hd-pulse" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -606,8 +737,18 @@ DASHBOARD_HTML = r"""
     </div>
 
     <div class="glass rounded-2xl p-4 flex flex-col">
-      <div class="pb-2 mb-2 border-b border-slate-800"><h2 class="text-sm font-bold">Matrix</h2></div>
+      <div class="pb-2 mb-2 border-b border-slate-800"><h2 class="text-sm font-bold">Display</h2></div>
       <div class="font-mono text-[10px] space-y-2.5">
+        <div>
+          <div class="flex justify-between text-slate-400 mb-1"><span>theme</span></div>
+          <select id="theme-select" class="w-full bg-slate-900/90 border border-slate-800 rounded-lg px-2 py-1.5 text-slate-200">
+            <option value="auto">Follow system</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+          <p class="text-[9px] text-slate-600 leading-snug mt-1">Stored in this browser, not on the station: a theme belongs to the screen you read on. Auto tracks the system setting live.</p>
+        </div>
+        <div class="border-t border-slate-800 pt-2"></div>
         <div class="flex items-center justify-between">
           <span class="text-slate-400">8x8 display</span>
           <button id="s-led" class="px-2.5 py-1 rounded-lg border text-[10px]">--</button>
@@ -706,13 +847,76 @@ function typeset(root) {
 const fmt = (v,d=1) => (v===null||v===undefined||Number.isNaN(v)) ? '--' : Number(v).toFixed(d);
 const SEV = { info:'text-slate-400', warn:'text-amber-300', error:'text-rose-300' };
 const tsFmt = (t) => new Date(t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+/* ---------------- THEME ----------------
+   Three states, because "auto" is a real preference and not the absence of one:
+   follow the system, or pin light or dark. Stored per browser in localStorage
+   rather than in the station's settings overlay, since a theme belongs to the
+   screen you are reading on, not to the weather station. */
+const THEME_KEY = 'ashvale-theme';
+let themePref = localStorage.getItem(THEME_KEY) || 'auto';
+const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+
+function resolvedTheme() {
+  return themePref === 'auto' ? (prefersDark.matches ? 'dark' : 'light') : themePref;
+}
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+function applyTheme(repaint) {
+  document.documentElement.setAttribute('data-theme', resolvedTheme());
+  const sel = el('theme-select');
+  if (sel && sel.value !== themePref) sel.value = themePref;
+  const btn = el('theme-toggle');
+  if (btn) btn.innerHTML = resolvedTheme() === 'dark' ? ICON_MOON : ICON_SUN;
+  if (repaint) restyleCharts();
+}
+function setTheme(pref) {
+  themePref = pref;
+  localStorage.setItem(THEME_KEY, pref);
+  applyTheme(true);
+}
+// Track the system only while following it.
+prefersDark.addEventListener('change', () => { if (themePref === 'auto') applyTheme(true); });
+
+const ICON_SUN  = '<svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>';
+const ICON_MOON = '<svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+
+// Applied before first paint below; charts are restyled once they exist.
+document.documentElement.setAttribute('data-theme', resolvedTheme());
+
 const GRID = 'rgba(255,255,255,.04)';
 const MONO = { family:'JetBrains Mono', size:10 };
+
+/* Chart.js keeps its own copy of every colour, so a CSS class change does not
+   reach it. Walk the live instances and repoint them at the theme tokens. */
+function restyleCharts() {
+  const grid = cssVar('--grid', GRID);
+  const axis = cssVar('--axis', '#64748b');
+  const strong = cssVar('--axis-strong', '#cbd5e1');
+  const tip = cssVar('--tooltip', 'rgba(15,23,42,.95)');
+  const border = resolvedTheme() === 'dark' ? 'rgba(255,255,255,.1)' : 'rgba(15,23,42,.12)';
+  Object.values(charts).forEach(c => {
+    if (!c || !c.options) return;
+    Object.values(c.options.scales || {}).forEach(sc => {
+      if (sc.grid) sc.grid.color = sc.grid.drawOnChartArea === false ? sc.grid.color : grid;
+      if (sc.ticks) sc.ticks.color = (sc.ticks.color === '#cbd5e1') ? strong : sc.ticks.color;
+    });
+    const tt = (c.options.plugins || {}).tooltip;
+    if (tt) { tt.backgroundColor = tip;
+              tt.titleColor = cssVar('--ink', '#f1f5f9');
+              tt.bodyColor = cssVar('--ink', '#f1f5f9');
+              tt.borderColor = border; }
+    c.update('none');
+  });
+}
 const charts = {}, loaders = {};
 let activeTab = 'live';
 
 document.querySelectorAll('[role=tab]').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 el('tab-select').addEventListener('change', e => selectTab(e.target.value));
+el('theme-toggle').addEventListener('click', () =>
+  setTheme(resolvedTheme() === 'dark' ? 'light' : 'dark'));
 function selectTab(name) {
   activeTab = name;
   document.querySelectorAll('[role=tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===name)));
@@ -1225,6 +1429,7 @@ async function loadSettings() {
   el('s-psy').className = sen.hum_psychrometric ? PILL_ON : PILL_OFF;
   el('s-heat').innerText = site.heating ? 'on' : 'off';
   el('s-heat').className = site.heating ? PILL_ON : PILL_OFF;
+  el('theme-select').value = themePref;
   el('s-setpoint').value = site.heating_setpoint_c;
   el('s-tau').value = site.thermal_time_constant_h;
 }
@@ -1259,6 +1464,7 @@ el('s-env-apply').addEventListener('click', async () => {
   await postSettings(body, 's-msg');
   pending = {}; el('s-note').value = '';
 });
+el('theme-select').addEventListener('change', e => setTheme(e.target.value));
 el('s-led').addEventListener('click', () =>
   postSettings({led_enabled: !(settingsDoc.server||{}).led_enabled}, 's-msg'));
 el('s-psy').addEventListener('click', () =>
@@ -1573,6 +1779,7 @@ loaders.methods = loadMethods;
 window.addEventListener('load', () => typeset());
 
 /* ---------------- BOOT ---------------- */
+applyTheme(true);
 connectStream();
 loadForecast();
 loadOutlook();
