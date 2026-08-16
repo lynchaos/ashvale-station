@@ -240,6 +240,45 @@ re-weights within about a day when the season turns.
 15-minute pressure it typically parks most of its weight on persistence. That
 is correct behaviour surfaced honestly, not a defect to engineer away.
 
+### The thermostat member
+
+A room held at a setpoint is not the same process as a room that is free to
+drift. It is a closed loop, and persistence, the baseline everything here is
+scored against, is simply the wrong statement about it: the truth is not "it
+stays where it is", it is "it returns to the setpoint".
+
+So when `site.heating` is on, the ensemble gains a fourth member:
+
+```
+dT_set(h) = (T_set - T_now) * (1 - exp(-h / tau))
+```
+
+First order, because that is what a controlled system is: `tau` is the time to
+close about 63% of the gap. Zero at h = 0, asymptotic to the full correction.
+
+Humidity follows and is the part that is easy to get wrong. Heating adds no
+moisture, so what is conserved is vapour pressure, not relative humidity:
+
+```
+RH(h) = RH_now * es(T_now) / es(T_now + dT_set(h))
+```
+
+Warm the air and RH falls although nothing was dried. This is why a heated house
+in winter is dry, and the test asserts the dew point is unchanged to 1e-6.
+
+Pressure gets zero: a thermostat cannot move the synoptic field.
+
+**It is offered, not imposed.** The Hedge weights score this member against the
+others on realised error like any other, so a wrong `tau` or a setpoint you
+forgot to update costs accuracy and gets down-weighted, rather than quietly
+biasing every forecast. With heating off the member returns zero, which makes it
+identical to persistence and therefore harmless.
+
+Adding it changed the member count from three to four, so `ForecastHead.from_dict`
+reinitialises `weights` **and** `member_mae` when a saved head has the old
+length. Missing the second one did not fail on load: it failed later inside
+`learn()` on a broadcast error, which is a much worse place to find out.
+
 ### Adaptive conformal intervals
 
 Split conformal is valid only under exchangeability, and weather is emphatically

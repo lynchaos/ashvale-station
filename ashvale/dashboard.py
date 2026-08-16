@@ -489,6 +489,22 @@ DASHBOARD_HTML = r"""
           <p class="text-[9px] text-slate-600 leading-snug mt-1.5">Closing a door changes how strongly the sensor couples to outside. The heads carry about 55 hours of memory, so tell them rather than waiting two days.</p>
         </div>
       </div>
+      <div class="mt-3 pt-3 border-t border-slate-800">
+        <div class="flex items-center justify-between mb-1.5">
+          <div>
+            <span class="text-[11px] font-semibold text-slate-300">Heated or cooled to a setpoint</span>
+            <p class="text-[9px] text-slate-600 leading-snug">A thermostat makes the room a closed loop: it returns to the setpoint instead of drifting. Persistence is the wrong baseline for that, so this adds a fourth ensemble member and lets the Hedge weights decide if it earns its place. Humidity follows at constant vapour pressure, which is why a heated house is dry.</p>
+          </div>
+          <button id="s-heat" class="shrink-0 ml-3 px-2.5 py-1 rounded-lg border text-[10px] font-mono">--</button>
+        </div>
+        <div class="grid grid-cols-2 gap-2 font-mono text-[10px]">
+          <label class="block"><span class="text-slate-600 uppercase text-[9px]">setpoint &deg;C</span>
+            <input id="s-setpoint" type="number" step="0.5" class="w-full mt-0.5 bg-slate-950/70 border border-slate-800 rounded-lg px-2 py-1.5 text-white"></label>
+          <label class="block"><span class="text-slate-600 uppercase text-[9px]">time constant h</span>
+            <input id="s-tau" type="number" step="0.1" class="w-full mt-0.5 bg-slate-950/70 border border-slate-800 rounded-lg px-2 py-1.5 text-white"></label>
+        </div>
+      </div>
+
       <div class="flex gap-2 mt-3">
         <input id="s-note" placeholder="what changed, e.g. doors shut, felt chilly"
                class="flex-1 min-w-0 bg-slate-950/70 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-white">
@@ -1111,6 +1127,10 @@ async function loadSettings() {
   el('s-lon').value = site.longitude;
   el('s-psy').innerText = sen.hum_psychrometric ? 'on' : 'off';
   el('s-psy').className = sen.hum_psychrometric ? PILL_ON : PILL_OFF;
+  el('s-heat').innerText = site.heating ? 'on' : 'off';
+  el('s-heat').className = site.heating ? PILL_ON : PILL_OFF;
+  el('s-setpoint').value = site.heating_setpoint_c;
+  el('s-tau').value = site.thermal_time_constant_h;
 }
 loaders.settings = loadSettings;
 
@@ -1147,6 +1167,13 @@ el('s-led').addEventListener('click', () =>
   postSettings({led_enabled: !(settingsDoc.server||{}).led_enabled}, 's-msg'));
 el('s-psy').addEventListener('click', () =>
   postSettings({hum_psychrometric: !(settingsDoc.sensor||{}).hum_psychrometric}, 's-msg'));
+el('s-heat').addEventListener('click', () =>
+  postSettings({heating: !(settingsDoc.site||{}).heating}, 's-msg'));
+for (const id of ['s-setpoint','s-tau']) {
+  el(id).addEventListener('change', () => postSettings({
+    heating_setpoint_c: Number(el('s-setpoint').value),
+    thermal_time_constant_h: Number(el('s-tau').value)}, 's-msg'));
+}
 el('s-fps').addEventListener('input', e => el('s-fps-val').innerText = e.target.value + ' fps');
 el('s-fps').addEventListener('change', e =>
   postSettings({led_fps: Number(e.target.value)}, 's-msg'));

@@ -43,7 +43,7 @@ import numpy as np
 from ..features import N_FEATURES, Standardiser, supervised_pairs
 from .rls import AdaptiveConformal, RecursiveLeastSquares
 
-MEMBERS = ("persistence", "climatology", "learned")
+MEMBERS = ("persistence", "climatology", "learned", "setpoint")
 
 
 class ForecastHead:
@@ -65,9 +65,11 @@ class ForecastHead:
     # -------------------------------------------------------- prediction
 
     def predict(self, x: np.ndarray, anchor: float,
-                climatology_delta: float = 0.0) -> Dict[str, float]:
+                climatology_delta: float = 0.0,
+                setpoint_delta: float = 0.0) -> Dict[str, float]:
         learned_delta = self.model.predict(x)
-        deltas = np.array([0.0, float(climatology_delta), float(learned_delta)])
+        deltas = np.array([0.0, float(climatology_delta), float(learned_delta),
+                           float(setpoint_delta)])
         blended = float(np.dot(self.weights, deltas))
         mu = float(anchor + blended)
         sigma = self.model.predict_std(x, self.model.noise_var)
@@ -85,10 +87,12 @@ class ForecastHead:
     # ---------------------------------------------------------- learning
 
     def learn(self, x: np.ndarray, anchor: float, truth: float,
-              climatology_delta: float = 0.0) -> float:
+              climatology_delta: float = 0.0,
+              setpoint_delta: float = 0.0) -> float:
         """One supervised step given a matured target."""
         deltas = np.array([0.0, float(climatology_delta),
-                           float(self.model.predict(x))])
+                           float(self.model.predict(x)),
+                           float(setpoint_delta)])
         member_pred = anchor + deltas
         losses = np.abs(member_pred - truth)
 
@@ -119,9 +123,23 @@ class ForecastHead:
         h = cls(s["target"], s["horizon_s"])
         h.model = RecursiveLeastSquares.from_dict(s["model"])
         h.conformal = AdaptiveConformal.from_dict(s["conformal"])
-        h.weights = np.array(s["weights"], dtype=float)
+        w = np.array(s["weights"], dtype=float)
+        if w.size != len(MEMBERS):
+            # A saved head from before the setpoint member existed. Reinitialise
+            # uniformly rather than guessing: the Hedge weights re-converge in
+            # about a day, which is far cheaper than silently mismatching a
+            # member to the wrong loss and corrupting every blend until someone
+            # notices.
+            w = np.ones(len(MEMBERS)) / len(MEMBERS)
+        h.weights = w
         h.eta = s["eta"]
-        h.member_mae = np.array(s["member_mae"], dtype=float)
+        mae = np.array(s["member_mae"], dtype=float)
+        # Same migration as the weights. Missing this one did not fail on load,
+        # it failed later inside learn() on a shape mismatch, which is a worse
+        # place to find out.
+        if mae.size != len(MEMBERS):
+            mae = np.zeros(len(MEMBERS))
+        h.member_mae = mae
         h.n_scored = s.get("n_scored", 0)
         return h
 
@@ -149,7 +167,7 @@ class NowcastEnsemble:
 
     def fit(self, X: np.ndarray, valid: np.ndarray, series: Dict[str, np.ndarray],
             climatology=None, grid_ts: Optional[np.ndarray] = None,
-            passes: int = 1, max_pairs: int = 2500) -> Dict[str, int]:
+            passes: int = 1, max_pairs: int = 2500, setpoint_fn=None) -> Dict[str, int]:
         """Batch-update every head from history.
 
         `max_pairs` bounds the work per head to the most recent samples.
@@ -187,7 +205,8 @@ class NowcastEnsemble:
                     clim[-mask_len:] = clim_fut - clim_now
                 for _ in range(max(int(passes), 1)):
                     for i in range(Xa.shape[0]):
-                        head.learn(Xa[i], anchor[i], anchor[i] + dy[i], clim[i])
+                        head.learn(Xa[i], anchor[i], anchor[i] + dy[i], clim[i],
+                                   setpoint_fn(target, h, anchor[i]) if setpoint_fn else 0.0)
                 counts[f"{target}@{h}"] = int(Xa.shape[0])
         self.trained_rows = int(X.shape[0])
         return counts
@@ -195,7 +214,7 @@ class NowcastEnsemble:
     # --------------------------------------------------------- inference
 
     def forecast(self, x_raw: np.ndarray, anchors: Dict[str, float], now: float,
-                 climatology=None) -> Dict[str, Dict[int, Dict[str, float]]]:
+                 climatology=None, setpoint_fn=None) -> Dict[str, Dict[int, Dict[str, float]]]:
         x = self.scaler.transform(np.atleast_2d(x_raw))[0]
         out: Dict[str, Dict[int, Dict[str, float]]] = {}
         for target in self.targets:
@@ -206,7 +225,8 @@ class NowcastEnsemble:
                 if climatology is not None and climatology.ready:
                     clim_delta = float(climatology.predict(target, np.array([now + h]))[0]
                                        - climatology.predict(target, np.array([now]))[0])
-                out[target][h] = self.heads[(target, h)].predict(x, anchor, clim_delta)
+                sp = setpoint_fn(target, h, anchor) if setpoint_fn else 0.0
+                out[target][h] = self.heads[(target, h)].predict(x, anchor, clim_delta, sp)
         return out
 
     def diagnostics(self) -> List[Dict]:

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -382,6 +383,55 @@ class Station:
         return {"rows": written, "seconds": round(secs, 2),
                 "k": comp.k, "hum_offset": hcomp.offset}
 
+    def _setpoint_delta(self, target: str, horizon_s: int, anchor: float) -> float:
+        """Where a thermostatted room is heading, as a delta from now.
+
+        A controlled room is first order: the heating closes the gap to the
+        setpoint exponentially, so after time h the remaining error is
+        exp(-h/tau) of what it was. The expected change is therefore
+
+            dT(h) = (T_set - T_now) * (1 - exp(-h / tau))
+
+        which is zero at h=0 and asymptotes to the full correction. That is a
+        much better statement about a heated room than persistence, which claims
+        the room stays wherever it happens to be.
+
+        Humidity follows for free and is the part people get wrong. Heating adds
+        no moisture, so vapour pressure is what is conserved, not relative
+        humidity. Warm the air and RH falls even though nothing was dried:
+
+            RH(h) = RH_now * es(T_now) / es(T_now + dT(h))
+
+        This is why a heated house in winter is dry. Pressure is unaffected: a
+        thermostat cannot move the synoptic field, so that member stays at zero
+        and the ensemble will correctly ignore it.
+
+        Returns 0.0 when heating is off, which makes this member identical to
+        persistence and therefore harmless.
+        """
+        site = self.cfg.site
+        if not site.heating:
+            return 0.0
+        tau_s = max(float(site.thermal_time_constant_h), 0.05) * 3600.0
+        closed = 1.0 - math.exp(-float(horizon_s) / tau_s)
+
+        temp_now = self.live.get("temp_smooth")
+        if temp_now is None:
+            return 0.0
+        d_temp = (float(site.heating_setpoint_c) - float(temp_now)) * closed
+
+        if target == "temperature":
+            return d_temp
+        if target == "humidity":
+            # Constant vapour pressure, so RH moves only because es(T) moved.
+            es_now = float(physics.saturation_vapour_pressure(temp_now))
+            es_fut = float(physics.saturation_vapour_pressure(temp_now + d_temp))
+            if es_fut <= 1e-9:
+                return 0.0
+            rh_now = float(anchor)
+            return float(np.clip(rh_now * es_now / es_fut, 0.0, 100.0)) - rh_now
+        return 0.0
+
     def set_environment(self, environment: Optional[str] = None,
                         enclosure: Optional[str] = None,
                         note: str = "") -> Dict:
@@ -467,7 +517,8 @@ class Station:
         grid_ts, cols, X, valid = built
 
         clim_scores = self.climatology.fit(grid_ts, cols, valid)
-        counts = self.nowcast.fit(X, valid, cols, self.climatology, grid_ts)
+        counts = self.nowcast.fit(X, valid, cols, self.climatology, grid_ts,
+                                  setpoint_fn=self._setpoint_delta)
 
         self.last_train = time.time()
         self.monitor.clear_retrain_flag()
@@ -503,7 +554,7 @@ class Station:
             "humidity": float(self.live.get("hum_smooth", cols["humidity"][-1])),
             "pressure": float(self.live.get("press_slp", cols["pressure"][-1])),
         }
-        fc = self.nowcast.forecast(x_now, anchors, now, self.climatology)
+        fc = self.nowcast.forecast(x_now, anchors, now, self.climatology, setpoint_fn=self._setpoint_delta)
 
         bundle: Dict[str, Any] = {"issued_ts": now, "anchors": anchors, "targets": {}}
         for target, per_h in fc.items():

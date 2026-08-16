@@ -57,7 +57,25 @@ class SiteConfig:
     # keep predicting the old regime for two days unless told. POST
     # /api/environment marks the moment and asks for a retrain.
     environment: str = "indoor"        # indoor | sheltered | outdoor
-    enclosure: str = "closed"          # closed | ventilated | open           # honest flag, changes how forecasts are worded
+    enclosure: str = "closed"          # closed | ventilated | open
+
+    # Central heating or air conditioning holding the room at a setpoint.
+    #
+    # This is a genuine change of process, not a label. A free-running room
+    # follows outdoor forcing and drifts; a thermostatted one is a closed loop
+    # that pulls back toward heating_setpoint_c whenever it strays. Persistence
+    # ("tomorrow equals today") is the wrong baseline for a controlled system,
+    # because the truth is "it returns to the setpoint".
+    #
+    # thermal_time_constant_h is how fast that pull acts: the time to close
+    # about 63% of a gap. A small well-insulated flat with responsive heating is
+    # under an hour; a large draughty house with slow radiators is several. If
+    # you do not know it, leave it: the ensemble weights this member against the
+    # others from measured error, so a wrong constant costs accuracy, not
+    # correctness.
+    heating: bool = False
+    heating_setpoint_c: float = 21.0
+    thermal_time_constant_h: float = 1.5           # honest flag, changes how forecasts are worded
 
 
 @dataclass

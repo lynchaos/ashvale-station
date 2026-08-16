@@ -178,6 +178,10 @@ def pipeline(cfg) -> List[Dict[str, Any]]:
                        "the model then detonates at sunrise. The trace is capped. "
                        "This is the most common way a field RLS deployment dies.",
             "math": [
+                r"dT_{set}(h) = (T_{set} - T_{now})\left(1 - e^{-h/\tau}\right)"
+                r"\qquad\text{(thermostat member, first-order closed loop)}",
+                r"RH(h) = RH_{now}\,\frac{e_s(T_{now})}{e_s(T_{now} + dT_{set}(h))}"
+                r"\qquad\text{(heating adds no moisture, so dew point is conserved)}",
                 r"\hat{\theta} = \arg\min_{\theta}\; \sum_{i=1}^{t}"
                 r"\lambda^{\,t-i}\big(y_i - \theta^{\top}x_i\big)^{2}"
                 r"\qquad\text{(exponentially weighted least squares)}",

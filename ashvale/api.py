@@ -136,6 +136,9 @@ class SettingsIn(BaseModel):
     altitude_m: Optional[float] = Field(None, ge=-430, le=9000)
     latitude: Optional[float] = Field(None, ge=-90, le=90)
     longitude: Optional[float] = Field(None, ge=-180, le=180)
+    heating: Optional[bool] = None
+    heating_setpoint_c: Optional[float] = Field(None, ge=5, le=35)
+    thermal_time_constant_h: Optional[float] = Field(None, ge=0.1, le=24)
     hum_psychrometric: Optional[bool] = None
     led_enabled: Optional[bool] = None
     led_fps: Optional[float] = Field(None, ge=4, le=30)
@@ -647,6 +650,9 @@ def get_settings() -> Dict:
                  "latitude": CONFIG.site.latitude,
                  "longitude": CONFIG.site.longitude,
                  "timezone": CONFIG.site.timezone,
+                 "heating": CONFIG.site.heating,
+                 "heating_setpoint_c": CONFIG.site.heating_setpoint_c,
+                 "thermal_time_constant_h": CONFIG.site.thermal_time_constant_h,
                  "name": CONFIG.site.name},
         "sensor": {"hum_psychrometric": CONFIG.sensor.hum_psychrometric,
                    "cpu_heat_k": round(st.tracker.compensator.k, 4),
@@ -692,6 +698,24 @@ def post_settings(body: SettingsIn) -> Dict:
             # Altitude feeds the sea-level reduction on every stored row, so the
             # history is now inconsistent with the new value until re-derived.
             needs_recompute = needs_recompute or name == "altitude_m"
+
+    # Turning the thermostat model on or off changes which process the heads are
+    # fitting, so it is a regime change and gets the same treatment as a door.
+    if body.heating is not None and body.heating != CONFIG.site.heating:
+        CONFIG.site.heating = bool(body.heating)
+        patch.setdefault("site", {})["heating"] = bool(body.heating)
+        applied.append(f"heating {'on' if body.heating else 'off'}")
+        st.store.log_event("discontinuity", "warn",
+                           f"heating {'on' if body.heating else 'off'}")
+        st.monitor.retrain_requested = True
+
+    for name, value, label in (
+            ("heating_setpoint_c", body.heating_setpoint_c, "setpoint"),
+            ("thermal_time_constant_h", body.thermal_time_constant_h, "time constant")):
+        if value is not None and value != getattr(CONFIG.site, name):
+            applied.append(f"{label} {getattr(CONFIG.site, name)} -> {value}")
+            setattr(CONFIG.site, name, float(value))
+            patch.setdefault("site", {})[name] = float(value)
 
     if body.hum_psychrometric is not None and \
             body.hum_psychrometric != CONFIG.sensor.hum_psychrometric:

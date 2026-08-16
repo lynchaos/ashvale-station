@@ -177,3 +177,74 @@ def test_kalman_state_round_trips_through_dict():
     back = KalmanCV.from_dict(kf.to_dict())
     assert back.level == pytest.approx(kf.level)
     assert back.rate == pytest.approx(kf.rate)
+
+
+# ---------------------------------------------------------------- thermostat
+
+def test_thermostat_reversion_is_first_order_and_preserves_dew_point():
+    """A heated room is a closed loop, and heating adds no moisture.
+
+    Two properties, both easy to get wrong. The temperature must close the gap
+    to the setpoint exponentially rather than jumping or drifting, and the
+    implied humidity change must leave the dew point exactly where it was: RH
+    falls only because es(T) rose, which is why a heated house in winter is dry.
+    """
+    import math
+
+    from ashvale.config import load_config
+    from ashvale.physics import dew_point, saturation_vapour_pressure
+    from ashvale.station import Station
+
+    cfg = load_config()
+    cfg.site.heating = True
+    cfg.site.heating_setpoint_c = 23.0
+    cfg.site.thermal_time_constant_h = 1.5
+    st = Station(cfg)
+    st.live = {"temp_smooth": 18.0}
+
+    tau = 1.5 * 3600.0
+    for h in (900, 3600, 10800, 86400):
+        expected = (23.0 - 18.0) * (1.0 - math.exp(-h / tau))
+        assert st._setpoint_delta("temperature", h, 18.0) == pytest.approx(expected, rel=1e-9)
+
+    # monotonic toward the setpoint, never past it
+    deltas = [st._setpoint_delta("temperature", h, 18.0)
+              for h in (900, 3600, 10800, 21600, 86400)]
+    assert all(a < b for a, b in zip(deltas, deltas[1:]))
+    assert deltas[-1] <= 5.0 + 1e-9
+
+    # dew point invariant
+    t0, rh0 = 18.0, 55.0
+    d_t = st._setpoint_delta("temperature", 86400, t0)
+    d_rh = st._setpoint_delta("humidity", 86400, rh0)
+    assert float(dew_point(t0 + d_t, rh0 + d_rh)) == pytest.approx(
+        float(dew_point(t0, rh0)), abs=1e-6)
+    assert d_rh < 0.0, "warming a room at constant moisture must lower RH"
+    assert float(saturation_vapour_pressure(t0 + d_t)) > float(
+        saturation_vapour_pressure(t0))
+
+    # a thermostat cannot move the synoptic field
+    assert st._setpoint_delta("pressure", 86400, 1013.0) == 0.0
+
+    # and off, the member is exactly persistence
+    cfg.site.heating = False
+    assert st._setpoint_delta("temperature", 86400, 18.0) == 0.0
+    assert st._setpoint_delta("humidity", 86400, 55.0) == 0.0
+
+
+def test_forecast_head_migrates_state_from_before_the_setpoint_member():
+    """An old save has three weights where there are now four."""
+    from ashvale.models.nowcast import MEMBERS, ForecastHead
+
+    h = ForecastHead(target="temperature", horizon_s=900, n_features=4)
+    state = h.to_dict()
+    state["weights"] = [0.2, 0.3, 0.5]          # a pre-setpoint save
+    state["member_mae"] = [0.4, 0.5, 0.6]
+    back = ForecastHead.from_dict(state)
+    assert back.weights.size == len(MEMBERS)
+    assert float(back.weights.sum()) == pytest.approx(1.0)
+    # member_mae must migrate too. Missing it did not fail on load, it failed
+    # later inside learn() on a broadcast error, which is a worse place to
+    # discover a migration bug.
+    assert back.member_mae.size == len(MEMBERS)
+    back.learn(np.zeros(4), 20.0, 20.5, 0.1, 0.2)      # must not raise
