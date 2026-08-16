@@ -14,6 +14,15 @@
 
 """The dashboard: six tabs in the header, one viewport, no scrolling.
 
+Responsive contract, in both axes. The no-scroll lock needs a floor on height
+as well as width: at 1024x600 the forecast chart collapsed to 1 px, which is
+worse than scrolling, so below 700 px tall the page scrolls and the charts keep
+a readable minimum. Between 700 and 920 px tall the fixed furniture (stat
+cards, outlook, diagnostics, the conditions column) compacts by media query so
+the height goes to the chart rather than the chrome. Below 1024 px wide the
+tab row becomes a native select, because six labels do not fit a phone header
+and a clipped tab strip is worse than a dropdown.
+
 Layout contract. The page is a fixed three-row grid pinned to the
 viewport height: header, tab bar, then a content region that takes the
 remaining space and never overflows the fold. Each tab lays its panels
@@ -78,11 +87,71 @@ DASHBOARD_HTML = r"""
   .scroller::-webkit-scrollbar-thumb { background:rgba(148,163,184,.28); border-radius:8px; }
   .flash { animation: flash .5s ease-out; }
   @keyframes flash { from { color:#a5b4fc; } to { color:inherit; } }
+  .sr-only { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
   :focus-visible { outline:2px solid #818cf8; outline-offset:2px; border-radius:6px; }
   @media (prefers-reduced-motion: reduce) { *{animation:none!important;transition:none!important} }
-  @media (min-width:1024px) {
+  /* The no-scroll contract needs a floor on height as well as width. A 1024x600
+     screen cannot show six panels legibly in one viewport: measured, the
+     forecast chart collapsed to 1 px, which is worse than scrolling. Below
+     700 px tall the page scrolls and the charts keep a readable minimum. */
+  @media (min-width:1024px) and (min-height:700px) {
     html,body { height:100%; overflow:hidden; }
     #shell { height:100dvh; }
+  }
+  @media (min-width:1024px) and (max-height:699px) {
+    .pane.active { min-height:640px; }
+  }
+
+  /* Nothing may push the page sideways. Flex and grid children default to
+     min-width:auto, so a long unbreakable subtitle inside a flex row refuses to
+     shrink and drags the whole layout wider than the viewport. Measured at 375
+     px this forced the shell to 452 px. */
+  html, body { max-width:100%; overflow-x:hidden; }
+  #shell, main, .pane, .glass { min-width:0; }
+  .pane > *, .glass > *, .glass p, .glass h2 { min-width:0; }
+  .glass p, .glass h2, .glass span { overflow-wrap:anywhere; }
+
+  /* Height-aware compaction. A 13 inch laptop has the same width as a desktop
+     but 280 fewer vertical pixels, and the fixed rows (stat cards, outlook,
+     diagnostics) eat that difference out of the one row that should flex: the
+     chart. Measured at 1280x800 the chart fell to 124 px, which is unreadable.
+     These rules give the height back to the chart rather than letting the
+     furniture keep it. */
+  @media (min-width:1024px) and (max-height:920px) {
+    .stat-card { padding:0.7rem 0.85rem; }
+    .stat-card .stat-big { font-size:2.1rem; line-height:1; }
+    .stat-card .stat-spark { height:1.4rem; }
+    .row-outlook { padding:0.55rem 1rem; }
+    .row-outlook .row-sub { display:none; }
+    .row-diag { padding-top:0.35rem; padding-bottom:0.35rem; }
+    .fc-strip { margin-top:0.35rem; padding-top:0.35rem; }
+  }
+  /* Conditions ahead is a fixed stack: icon, probability, the wet/dry buttons
+     and the tendency chart. At 1280x800 it needed 351 px into 267, so it
+     clipped its own chart. Same treatment as the stat cards: give the height
+     back by shrinking the furniture, not by hiding the reading. */
+  @media (min-width:1024px) and (max-height:920px) {
+    .cond-cap { display:none; }
+    .cond-icon svg { width:36px; height:36px; }
+    .cond-label { padding:0.35rem 0.5rem; }
+  }
+  @media (min-width:1024px) and (max-height:830px) {
+    .cond-icon svg { width:30px; height:30px; }
+    /* 1366x768 is the most common laptop resolution in the world, so it has to
+       fit rather than nearly fit. These four give back about 36 px. */
+    .cond-inner { gap:0.35rem; }
+    .cond-labstat, .cond-split { display:none; }
+    .cond-label { padding:0.3rem 0.45rem; }
+    .cond-label button { padding-top:0.2rem; padding-bottom:0.2rem; }
+    /* At 1024 the column is narrower, so the same text wraps taller. The
+       Zambretti number is already spelled out by the sky line above it. */
+    .cond-z { display:none; }
+    #c-label { font-size:0.8rem; }
+    .stat-card { padding:0.55rem 0.75rem; }
+    .stat-card .stat-big { font-size:1.8rem; }
+    .stat-card .stat-spark { display:none; }
+    .stat-card .stat-detail { font-size:9px; }
+    .row-outlook { padding:0.4rem 0.85rem; }
   }
 </style>
 </head>
@@ -114,11 +183,30 @@ DASHBOARD_HTML = r"""
         </p>
       </div>
     </div>
-    <nav role="tablist" class="flex gap-1 flex-1 min-w-0 overflow-x-auto justify-center">
+    <!-- Six labels will not fit a phone header, and measured at 375 px all six
+         were clipped with no affordance that they existed. Below md the tabs
+         become a native select: always reachable, one tap, and it uses the
+         platform's own picker rather than a bespoke drawer. The button row
+         returns as soon as there is room for it. -->
+    <!-- basis-full so it wraps onto its own line rather than being squeezed to a
+         bare chevron between the title and the clock. On a phone the current
+         section has to be readable, not just reachable. -->
+    <label class="lg:hidden basis-full order-last min-w-0">
+      <span class="sr-only">Section</span>
+      <select id="tab-select" class="w-full bg-slate-900/90 border border-slate-800 text-slate-200 text-xs font-semibold rounded-lg px-2.5 py-2">
+        <option value="live">Live</option>
+        <option value="history">History</option>
+        <option value="models">Models and Calibration</option>
+        <option value="nerd">Stats for Nerds</option>
+        <option value="settings">Settings</option>
+        <option value="methods">Methods</option>
+      </select>
+    </label>
+    <nav role="tablist" class="hidden lg:flex gap-1 flex-1 min-w-0 overflow-x-auto justify-center">
       <button role="tab" data-tab="live"     aria-selected="true"  class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Live</button>
       <button role="tab" data-tab="history"  aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">History</button>
-      <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Models and Calibration</button>
-      <button role="tab" data-tab="nerd"     aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Stats for Nerds</button>
+      <button role="tab" data-tab="models"   aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200"><span class="xl:hidden">Models</span><span class="hidden xl:inline">Models and Calibration</span></button>
+      <button role="tab" data-tab="nerd"     aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200"><span class="xl:hidden">Stats</span><span class="hidden xl:inline">Stats for Nerds</span></button>
       <button role="tab" data-tab="settings" aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Settings</button>
       <button role="tab" data-tab="methods"  aria-selected="false" class="tabbtn shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-400 border border-transparent hover:text-slate-200">Methods</button>
     </nav>
@@ -138,75 +226,75 @@ DASHBOARD_HTML = r"""
   <!-- ---------------- LIVE ---------------- -->
   <section id="pane-live" class="pane active h-full min-h-0 gap-3 grid-cols-1 lg:grid-cols-4 lg:grid-rows-[auto_auto_1fr_auto]">
 
-    <div class="glass rounded-2xl p-4 lg:col-span-4 shrink-0">
-      <div class="flex items-center justify-between mb-2">
+    <div class="row-outlook glass rounded-2xl p-4 lg:col-span-4 shrink-0">
+      <div class="flex items-center justify-between gap-2 mb-2 min-w-0">
         <div>
           <h2 class="text-sm font-bold">Seven day outlook</h2>
-          <p class="text-[10px] text-slate-500 font-mono">climatology plus decaying anomaly, not a synoptic forecast</p>
+          <p class="row-sub text-[10px] text-slate-500 font-mono">climatology plus decaying anomaly, not a synoptic forecast</p>
         </div>
         <span id="o-badge" class="px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-mono uppercase font-semibold">warming up</span>
       </div>
       <div id="o-strip" class="grid grid-cols-4 sm:grid-cols-7 gap-2"></div>
     </div>
 
-    <div class="glass rounded-2xl p-4 flex flex-col justify-between">
+    <div class="stat-card glass rounded-2xl p-4 flex flex-col justify-between">
       <div class="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-amber-400">
         <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>Temperature</span>
         <span class="text-slate-600 font-mono">KALMAN</span>
       </div>
-      <div class="flex items-baseline gap-1 my-1"><span id="l-temp" class="text-5xl font-extrabold tracking-tight">--</span><span class="text-lg text-amber-400/70 font-semibold">&deg;C</span></div>
-      <div class="font-mono text-[10px] text-slate-500 space-y-0.5">
+      <div class="flex items-baseline gap-1 my-1"><span id="l-temp" class="stat-big text-5xl font-extrabold tracking-tight">--</span><span class="text-lg text-amber-400/70 font-semibold">&deg;C</span></div>
+      <div class="stat-detail font-mono text-[10px] text-slate-500 space-y-0.5">
         <div class="flex justify-between"><span>rate</span><span id="l-temp-rate" class="text-amber-300">--</span></div>
         <div class="flex justify-between"><span>raw / cpu</span><span id="l-temp-raw" class="text-slate-400">--</span></div>
       </div>
       <!-- Chart.js with maintainAspectRatio:false fills its parent, so a
            sparkline needs an explicitly sized relative wrapper or it eats the card. -->
-      <div class="h-9 mt-1.5 shrink-0 relative"><canvas id="spark-temp"></canvas></div>
+      <div class="stat-spark h-9 mt-1.5 shrink-0 relative"><canvas id="spark-temp"></canvas></div>
     </div>
 
-    <div class="glass rounded-2xl p-4 flex flex-col justify-between">
+    <div class="stat-card glass rounded-2xl p-4 flex flex-col justify-between">
       <div class="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-cyan-400">
         <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>Humidity</span>
         <span class="text-slate-600 font-mono">HTS221</span>
       </div>
-      <div class="flex items-baseline gap-1 my-1"><span id="l-hum" class="text-5xl font-extrabold tracking-tight">--</span><span class="text-lg text-cyan-400/70 font-semibold">%</span></div>
-      <div class="font-mono text-[10px] text-slate-500 space-y-0.5">
+      <div class="flex items-baseline gap-1 my-1"><span id="l-hum" class="stat-big text-5xl font-extrabold tracking-tight">--</span><span class="text-lg text-cyan-400/70 font-semibold">%</span></div>
+      <div class="stat-detail font-mono text-[10px] text-slate-500 space-y-0.5">
         <div class="flex justify-between"><span>dew point</span><span id="l-dew" class="text-cyan-300">--</span></div>
         <div class="flex justify-between"><span>depression</span><span id="l-dep" class="text-slate-400">--</span></div>
       </div>
       <!-- Chart.js with maintainAspectRatio:false fills its parent, so a
            sparkline needs an explicitly sized relative wrapper or it eats the card. -->
-      <div class="h-9 mt-1.5 shrink-0 relative"><canvas id="spark-hum"></canvas></div>
+      <div class="stat-spark h-9 mt-1.5 shrink-0 relative"><canvas id="spark-hum"></canvas></div>
     </div>
 
-    <div class="glass rounded-2xl p-4 flex flex-col justify-between">
+    <div class="stat-card glass rounded-2xl p-4 flex flex-col justify-between">
       <div class="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-violet-400">
         <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-violet-400"></span>Barometer</span>
         <span class="text-slate-600 font-mono">MSL</span>
       </div>
-      <div class="flex items-baseline gap-1 my-1"><span id="l-press" class="text-5xl font-extrabold tracking-tight">--</span><span class="text-lg text-violet-400/70 font-semibold">hPa</span></div>
-      <div class="font-mono text-[10px] text-slate-500 space-y-0.5">
+      <div class="flex items-baseline gap-1 my-1"><span id="l-press" class="stat-big text-5xl font-extrabold tracking-tight">--</span><span class="text-lg text-violet-400/70 font-semibold">hPa</span></div>
+      <div class="stat-detail font-mono text-[10px] text-slate-500 space-y-0.5">
         <div class="flex justify-between"><span>tendency</span><span id="l-press-rate" class="text-violet-300">--</span></div>
         <div class="flex justify-between"><span>character</span><span id="l-press-char" class="text-slate-400 truncate ml-2">--</span></div>
       </div>
       <!-- Chart.js with maintainAspectRatio:false fills its parent, so a
            sparkline needs an explicitly sized relative wrapper or it eats the card. -->
-      <div class="h-9 mt-1.5 shrink-0 relative"><canvas id="spark-press"></canvas></div>
+      <div class="stat-spark h-9 mt-1.5 shrink-0 relative"><canvas id="spark-press"></canvas></div>
     </div>
 
-    <div class="glass rounded-2xl p-4 flex flex-col justify-between">
+    <div class="stat-card glass rounded-2xl p-4 flex flex-col justify-between">
       <div class="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-emerald-400">
         <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>Sky</span>
         <div id="l-swatch" class="w-3 h-3 rounded-full border border-white/30"></div>
       </div>
-      <div class="flex items-baseline gap-1 my-1"><span id="l-lux" class="text-5xl font-extrabold tracking-tight">--</span><span class="text-lg text-emerald-400/70 font-semibold">clr</span></div>
-      <div class="font-mono text-[10px] text-slate-500 space-y-0.5">
+      <div class="flex items-baseline gap-1 my-1"><span id="l-lux" class="stat-big text-5xl font-extrabold tracking-tight">--</span><span class="text-lg text-emerald-400/70 font-semibold">clr</span></div>
+      <div class="stat-detail font-mono text-[10px] text-slate-500 space-y-0.5">
         <div class="flex justify-between"><span>cloud index</span><span id="l-cloud" class="text-emerald-300">--</span></div>
         <div class="flex justify-between"><span>sun / cct</span><span id="l-sun" class="text-slate-400">--</span></div>
       </div>
       <!-- Chart.js with maintainAspectRatio:false fills its parent, so a
            sparkline needs an explicitly sized relative wrapper or it eats the card. -->
-      <div class="h-9 mt-1.5 shrink-0 relative"><canvas id="spark-lux"></canvas></div>
+      <div class="stat-spark h-9 mt-1.5 shrink-0 relative"><canvas id="spark-lux"></canvas></div>
     </div>
 
     <div class="glass rounded-2xl p-4 lg:col-span-3 flex flex-col min-h-0">
@@ -227,8 +315,8 @@ DASHBOARD_HTML = r"""
           <button id="fc-reset" class="px-2.5 py-1 rounded-lg text-[11px] font-mono bg-slate-800/60 text-slate-300 border border-slate-700 hover:bg-slate-800">Reset</button>
         </div>
       </div>
-      <div class="flex-1 min-h-0 relative"><canvas id="fanChart"></canvas></div>
-      <div id="fc-table" class="shrink-0 mt-2 pt-2 border-t border-slate-800 grid grid-cols-3 sm:grid-cols-6 gap-2 font-mono text-[10px]"></div>
+      <div class="flex-1 min-h-[220px] lg:min-h-0 relative"><canvas id="fanChart"></canvas></div>
+      <div id="fc-table" class="fc-strip shrink-0 mt-2 pt-2 border-t border-slate-800 grid grid-cols-3 sm:grid-cols-6 gap-2 font-mono text-[10px]"></div>
     </div>
 
     <div class="glass rounded-2xl p-4 flex flex-col min-h-0">
@@ -236,39 +324,44 @@ DASHBOARD_HTML = r"""
         <h2 class="text-sm font-bold">Conditions ahead</h2>
         <p class="text-[10px] text-indigo-400 font-mono">Zambretti prior + online logistic</p>
       </div>
-      <div class="flex-1 min-h-0 space-y-2 pr-1">
-        <div class="text-center">
-          <div id="c-icon" class="flex justify-center mb-0.5"></div>
+      <!-- Flex column with exactly one flexible child. The stack was fixed-height
+           and simply overflowed its card on any short screen; shrinking each
+           piece by media query chased the symptom. Now the icon, probability and
+           label buttons hold their size and the tendency chart absorbs whatever
+           is left, so the column fits at any height and only the chart changes. -->
+      <div class="cond-inner flex-1 min-h-0 flex flex-col gap-2 pr-1">
+        <div class="shrink-0 text-center">
+          <div id="c-icon" class="cond-icon flex justify-center mb-0.5"></div>
           <div id="c-label" class="text-base font-extrabold leading-tight">--</div>
           <div id="c-sky" class="text-[10px] text-slate-400 font-medium">--</div>
-          <div class="text-[10px] text-slate-500 font-mono mt-0.5">Z=<span id="c-z">-</span> &middot; <span id="c-trend">-</span></div>
+          <div class="cond-z text-[10px] text-slate-500 font-mono mt-0.5">Z=<span id="c-z">-</span> &middot; <span id="c-trend">-</span></div>
         </div>
-        <div>
+        <div class="shrink-0">
           <div class="flex justify-between items-baseline mb-1"><span class="text-[10px] text-slate-500 font-mono">rain probability</span><span id="c-pct" class="text-base font-bold text-cyan-300 font-mono">--</span></div>
           <div class="h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-800"><div id="c-bar" class="tick h-full bg-gradient-to-r from-cyan-500 to-blue-600" style="width:0%"></div></div>
-          <div class="flex justify-between text-[9px] font-mono text-slate-600 mt-1"><span>prior <span id="c-prior">-</span></span><span>learner <span id="c-model">-</span></span><span>trust <span id="c-trust">-</span></span></div>
+          <div class="cond-split flex justify-between text-[9px] font-mono text-slate-600 mt-1"><span>prior <span id="c-prior">-</span></span><span>learner <span id="c-model">-</span></span><span>trust <span id="c-trust">-</span></span></div>
         </div>
-        <div class="bg-slate-900/70 rounded-xl border border-slate-800/80 p-2 space-y-1.5">
+        <div class="cond-label shrink-0 bg-slate-900/70 rounded-xl border border-slate-800/80 p-2 space-y-1.5">
           <div class="text-[10px] text-slate-400 font-mono">Was it wet in the last hour?</div>
           <div class="flex gap-2">
             <button data-label="1" class="rain-label flex-1 px-2 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-[11px] font-medium">Yes, rain</button>
             <button data-label="0" class="rain-label flex-1 px-2 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-slate-300 border border-slate-700 text-[11px] font-medium">No, dry</button>
           </div>
-          <div id="c-labstat" class="text-[9px] text-slate-600 font-mono"><span id="c-labn">0</span> confirmed observations</div>
+          <div id="c-labstat" class="cond-labstat text-[9px] text-slate-600 font-mono"><span id="c-labn">0</span> confirmed observations</div>
         </div>
-        <div>
-          <div class="flex justify-between items-baseline mb-1">
+        <div class="flex-1 min-h-0 flex flex-col">
+          <div class="shrink-0 flex justify-between items-baseline mb-1">
             <span class="text-[10px] text-slate-500 font-mono">pressure, last 24 h</span>
             <span id="c-tend" class="text-[10px] text-violet-300 font-mono">--</span>
           </div>
-          <div class="h-20 relative"><canvas id="tendChart"></canvas></div>
-          <p class="text-[9px] text-slate-600 font-mono mt-0.5 leading-none">Slope, not level, drives the forecast.</p>
+          <div class="cond-tend flex-1 min-h-[42px] relative"><canvas id="tendChart"></canvas></div>
+          <p class="cond-cap text-[9px] text-slate-600 font-mono mt-0.5 leading-none">Slope, not level, drives the forecast.</p>
         </div>
       </div>
     </div>
 
 
-    <div class="glass rounded-2xl px-4 py-2.5 lg:col-span-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-x-4 gap-y-1.5 font-mono text-[10px]">
+    <div class="row-diag glass rounded-2xl px-4 py-2.5 lg:col-span-4 grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-x-4 gap-y-1.5 font-mono text-[10px]">
       <div><div class="text-slate-600 uppercase">wet bulb</div><div id="d-wb" class="text-slate-200 font-semibold">--</div></div>
       <div><div class="text-slate-600 uppercase">vpd</div><div id="d-vpd" class="text-slate-200 font-semibold">--</div></div>
       <div><div class="text-slate-600 uppercase">abs hum</div><div id="d-ah" class="text-slate-200 font-semibold">--</div></div>
@@ -308,7 +401,7 @@ DASHBOARD_HTML = r"""
     </div>
 
     <div class="glass rounded-2xl p-4 lg:col-span-3 flex flex-col min-h-0">
-      <div class="flex-1 min-h-0 relative"><canvas id="histChart"></canvas></div>
+      <div class="flex-1 min-h-[220px] lg:min-h-0 relative"><canvas id="histChart"></canvas></div>
     </div>
 
     <div class="glass rounded-2xl p-4 flex flex-col min-h-0">
@@ -619,9 +712,12 @@ const charts = {}, loaders = {};
 let activeTab = 'live';
 
 document.querySelectorAll('[role=tab]').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+el('tab-select').addEventListener('change', e => selectTab(e.target.value));
 function selectTab(name) {
   activeTab = name;
   document.querySelectorAll('[role=tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===name)));
+  const sel = el('tab-select');
+  if (sel && sel.value !== name) sel.value = name;
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id==='pane-'+name));
   if (loaders[name]) loaders[name]();
   // Chart.js cannot measure a canvas inside display:none, so resize on reveal.

@@ -160,9 +160,12 @@ permanently.
 
 ## The dashboard
 
-Six tabs, one viewport, no scrolling on desktop. Below 1024 px the constraint is
-released, because pinning six panels into a phone viewport produces unreadable
-eight-pixel type.
+Six tabs, one viewport, no scrolling on desktop. Below 1024 px wide the tabs
+become a dropdown and the page scrolls, because pinning six panels into a phone
+viewport produces unreadable eight-pixel type. The same release applies below
+700 px tall: a short screen gets a scrollbar rather than a one-pixel chart.
+
+Verified across ten viewports from 1920x1080 to 375x667, six tabs each.
 
 | Tab | Answers |
 | --- | --- |
