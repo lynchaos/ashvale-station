@@ -14,7 +14,12 @@
 
 """The dashboard: six tabs in the header, one viewport, no scrolling.
 
-Responsive contract, in both axes. The no-scroll lock needs a floor on height
+Responsive contract, in both axes, and self-correcting rather than enumerated.
+The page measures after every layout change whether any card's content escapes
+it and escalates: normal, then compact, then release the height lock and scroll.
+Chasing this with media queries kept missing cases, because a user's zoom level,
+a larger default font and simply more accumulated history all change how much a
+panel needs, and no fixed list of breakpoints covers that. The no-scroll lock needs a floor on height
 as well as width: at 1024x600 the forecast chart collapsed to 1 px, which is
 worse than scrolling, so below 700 px tall the page scrolls and the charts keep
 a readable minimum. Between 700 and 920 px tall the fixed furniture (stat
@@ -230,6 +235,38 @@ DASHBOARD_HTML = r"""
   @media (min-width:1024px) and (max-height:699px) {
     .pane.active { min-height:640px; }
   }
+
+  /* Self-correcting density. Chasing this with viewport media queries kept
+     missing cases: a user's zoom level, a larger default font, or simply more
+     accumulated history all change how much a card needs, and no fixed list of
+     breakpoints covers that. Instead the page measures itself after every
+     layout change and escalates: normal, then compact, then release the height
+     lock and scroll. Whatever the viewport, content is never silently clipped. */
+  html[data-fit="compact"] .stat-card { padding:0.5rem 0.7rem; }
+  html[data-fit="compact"] .stat-card .stat-big { font-size:1.7rem; }
+  html[data-fit="compact"] .stat-card .stat-spark { display:none; }
+  html[data-fit="compact"] .row-outlook { padding:0.35rem 0.8rem; }
+  html[data-fit="compact"] .row-outlook .row-sub { display:none; }
+  html[data-fit="compact"] .row-diag { padding-top:0.25rem; padding-bottom:0.25rem; }
+  html[data-fit="compact"] .cond-cap,
+  html[data-fit="compact"] .cond-labstat,
+  html[data-fit="compact"] .cond-split,
+  html[data-fit="compact"] .cond-z { display:none; }
+  html[data-fit="compact"] .cond-icon svg { width:26px; height:26px; }
+  html[data-fit="compact"] .cond-tend { min-height:24px; }
+  html[data-fit="compact"] #n-heads table { font-size:8px; }
+  html[data-fit="compact"] #n-heads table td,
+  html[data-fit="compact"] #n-heads table th { line-height:1.15; }
+  html[data-fit="compact"] #n-theta > div,
+  html[data-fit="compact"] #n-rel > div { line-height:1.1; }
+  html[data-fit="compact"] #m-score table { font-size:9px; }
+
+  /* Last resort: if it still does not fit, scrolling beats hiding. */
+  html[data-fit="scroll"], html[data-fit="scroll"] body {
+    height:auto !important; overflow-y:auto !important;
+  }
+  html[data-fit="scroll"] #shell { height:auto !important; }
+  html[data-fit="scroll"] .pane.active { min-height:0; }
 
   /* Nothing may push the page sideways. Flex and grid children default to
      min-width:auto, so a long unbreakable subtitle inside a flex row refuses to
@@ -946,7 +983,7 @@ function selectTab(name) {
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id==='pane-'+name));
   if (loaders[name]) loaders[name]();
   // Chart.js cannot measure a canvas inside display:none, so resize on reveal.
-  setTimeout(() => Object.values(charts).forEach(c => c && c.resize()), 40);
+  setTimeout(() => { Object.values(charts).forEach(c => c && c.resize()); scheduleFit(); }, 40);
 }
 
 /* ---------------- LIVE ---------------- */
@@ -1719,6 +1756,43 @@ function wxSvg(name, size) {
   return '<svg viewBox="0 0 64 64" width="'+size+'" height="'+size+'" aria-hidden="true">'+(WX[name]||WX.cloud)+'</svg>';
 }
 
+/* ---------------- SELF-CORRECTING FIT ----------------
+   Measures whether any card's content escapes it and escalates the density
+   until nothing does. Runs after every render and on resize, so it survives a
+   viewport I never tested, a zoom level, a larger default font, or simply more
+   history than the panel was designed around. */
+function paneOverflows() {
+  const pane = document.querySelector('.pane.active');
+  if (!pane) return false;
+  return [...pane.querySelectorAll('.glass')].some(card => {
+    const cr = card.getBoundingClientRect();
+    if (cr.height < 2) return false;
+    return [...card.querySelectorAll('*')].some(n => {
+      const r = n.getBoundingClientRect();
+      if (r.height < 1) return false;
+      for (let a = n.parentElement; a && a !== card; a = a.parentElement) {
+        const ov = getComputedStyle(a).overflowY;
+        if (ov === 'auto' || ov === 'scroll') return false;   // it can scroll, fine
+      }
+      return r.bottom - cr.bottom > 2;
+    });
+  });
+}
+let fitBusy = false;
+function fitPane() {
+  if (fitBusy) return;
+  fitBusy = true;
+  const html = document.documentElement;
+  html.removeAttribute('data-fit');
+  if (paneOverflows()) {
+    html.setAttribute('data-fit', 'compact');
+    if (paneOverflows()) html.setAttribute('data-fit', 'scroll');
+  }
+  fitBusy = false;
+}
+const scheduleFit = () => requestAnimationFrame(() => requestAnimationFrame(fitPane));
+window.addEventListener('resize', scheduleFit);
+
 /* ---------------- STATION LOG ---------------- */
 let logEvents = [];
 function trimLog() {
@@ -1841,6 +1915,7 @@ window.addEventListener('load', () => typeset());
 
 /* ---------------- BOOT ---------------- */
 applyTheme(true);
+scheduleFit();
 connectStream();
 loadForecast();
 loadOutlook();

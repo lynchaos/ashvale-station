@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -801,5 +801,11 @@ async def stream(request: Request):
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
-    return DASHBOARD_HTML
+def dashboard() -> Response:
+    # The page is generated from live config and changes with every deploy, and
+    # it carried no cache headers, so a browser could hold an old copy
+    # indefinitely and show layout bugs that were already fixed. The vendored
+    # assets under /static are fingerprint-free too, but they only change when
+    # the station is updated, so revalidation is enough for them.
+    return HTMLResponse(DASHBOARD_HTML,
+                        headers={"Cache-Control": "no-cache, must-revalidate"})
