@@ -47,8 +47,9 @@ class RecursiveLeastSquares:
         self.d = int(n_features)
         self.lam = float(forgetting)
         self.p_max = float(p_max)
+        self.delta = float(delta)          # kept so a refit can return to the prior
         self.theta = np.zeros(self.d)
-        self.P = np.eye(self.d) * float(delta)
+        self.P = np.eye(self.d) * self.delta
         self.n_updates = 0
         self.ewma_sq_error = 0.0
 
@@ -102,14 +103,32 @@ class RecursiveLeastSquares:
     def noise_var(self) -> float:
         return float(max(self.ewma_sq_error, 1e-9))
 
+    def reset(self) -> None:
+        """Return to the prior, keeping the configuration.
+
+        A batch refit has to start from here rather than continuing, because
+        replaying the same history into a live filter is not the same as seeing
+        new data. RLS with forgetting treats every update as fresh evidence, so
+        feeding it the same rows on each retrain tick makes it believe it has
+        many times the data it has: P collapses, and the weights in directions
+        the data never excites drift without anything to pull them back.
+        """
+        self.theta = np.zeros(self.d)
+        self.P = np.eye(self.d) * self.delta
+        self.n_updates = 0
+        self.ewma_sq_error = 0.0
+
     def to_dict(self) -> Dict:
         return {"d": self.d, "lam": self.lam, "p_max": self.p_max,
+                "delta": self.delta,
                 "theta": self.theta.tolist(), "P": self.P.tolist(),
                 "n": self.n_updates, "ewma": self.ewma_sq_error}
 
     @classmethod
     def from_dict(cls, s: Dict) -> "RecursiveLeastSquares":
-        m = cls(s["d"], s["lam"], 1.0, s.get("p_max", 1e6))
+        # delta must survive the round trip or a refit after a restart would
+        # return to the wrong prior.
+        m = cls(s["d"], s["lam"], s.get("delta", 100.0), s.get("p_max", 1e6))
         m.theta = np.array(s["theta"], dtype=float)
         m.P = np.array(s["P"], dtype=float)
         m.n_updates = s.get("n", 0)

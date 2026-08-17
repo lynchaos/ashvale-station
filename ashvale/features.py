@@ -82,7 +82,8 @@ def _rolling(a: np.ndarray, win: int, fn) -> np.ndarray:
 
 def build_features(grid_ts: np.ndarray, temp: np.ndarray, hum: np.ndarray,
                    press_slp: np.ndarray, lux: np.ndarray,
-                   grid_s: int, latitude: float, longitude: float
+                   grid_s: int, latitude: float, longitude: float,
+                   min_days_annual: float = 120.0
                    ) -> Tuple[np.ndarray, np.ndarray]:
     """Return (X of shape (n, N_FEATURES), valid mask of shape (n,))."""
     n = grid_ts.size
@@ -127,6 +128,20 @@ def build_features(grid_ts: np.ndarray, temp: np.ndarray, hum: np.ndarray,
     hour = (grid_ts % 86400.0) / 86400.0
     doy = (grid_ts % 31557600.0) / 31557600.0
 
+    # Annual harmonics are held at zero until the record spans enough of a year
+    # to excite them, exactly as the climatology fit already gates its annual
+    # terms. Left on from day one they are near-constant, near-collinear with
+    # each other and with the bias, and RLS answers that rank-deficient system
+    # with enormous cancelling weights. Measured on a real station after 1.5
+    # days: cos_doy +1191, sin_doy +1174, ||theta|| 1680 against a median |theta|
+    # of 1.67, cond(P) 3.1e9, and a six hour forecast of 53 C in a 24 C room.
+    # Zero is the honest value: with a day and a half of data the station knows
+    # nothing whatsoever about the season.
+    span_days = float(grid_ts[-1] - grid_ts[0]) / 86400.0 if n > 1 else 0.0
+    annual_on = 1.0 if span_days >= min_days_annual else 0.0
+    sin_doy = np.sin(2 * np.pi * doy) * annual_on
+    cos_doy = np.cos(2 * np.pi * doy) * annual_on
+
     X = np.column_stack([
         np.ones(n),
         temp, temp_rate_1h, temp_rate_3h, temp_std_3h, temp_dev_24h,
@@ -136,7 +151,7 @@ def build_features(grid_ts: np.ndarray, temp: np.ndarray, hum: np.ndarray,
         log_lux, cloud, elev, np.clip(elev, 0.0, None), (elev > 0.0).astype(float),
         np.sin(2 * np.pi * hour), np.cos(2 * np.pi * hour),
         np.sin(4 * np.pi * hour), np.cos(4 * np.pi * hour),
-        np.sin(2 * np.pi * doy), np.cos(2 * np.pi * doy),
+        sin_doy, cos_doy,
         press_anom * (hum - 70.0) / 100.0,
         press_tend_3h * dep,
     ])
@@ -172,7 +187,12 @@ class Standardiser:
         if self.n < 2:
             return np.atleast_2d(X)
         std = np.sqrt(self.m2 / max(self.n - 1, 1))
-        std = np.where(std < 1e-8, 1.0, std)
+        # 1e-8 was a token guard: it only catches a bit-exactly constant column.
+        # A feature that merely barely moves sails through and gets divided by
+        # its own noise, which manufactures a large z-score out of nothing. A
+        # feature with this little spread carries no information, so scale it by
+        # one and let it stay near zero rather than amplifying it.
+        std = np.where(std < 1e-3, 1.0, std)
         out = (np.atleast_2d(X) - self.mean) / std
         out[:, 0] = 1.0            # keep the bias column intact
         return out

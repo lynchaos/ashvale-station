@@ -505,6 +505,7 @@ class Station:
             grid_ts, cols["temperature"], cols["humidity"], cols["pressure"],
             cols["lux"], self.cfg.model.grid_s,
             self.cfg.site.latitude, self.cfg.site.longitude,
+            self.cfg.model.climatology_min_days_annual,
         )
         return grid_ts, cols, X, valid
 

@@ -179,6 +179,18 @@ class NowcastEnsemble:
         """Batch pass over history. Called on startup and every retrain tick."""
         if X.shape[0] < 10:
             return {"rows": 0}
+        # A refit starts from the prior. Without this, every retrain tick replays
+        # the same history into a live filter, and RLS with forgetting reads that
+        # as new evidence each time: measured on a real station after 1.5 days,
+        # 453 grid rows had produced 64,676 updates, cond(P) of 3.1e9 and a
+        # weight vector of norm 1680 whose two largest entries were the annual
+        # harmonics the record cannot yet resolve. The result was a six hour
+        # forecast of 53 C in a 24 C room, with a plus or minus of 0.43.
+        #
+        # The conformal calibrators and the Hedge weights are deliberately left
+        # alone: those are earned from scored forecasts, not from this regression.
+        for head in self.heads.values():
+            head.model.reset()
         self.scaler.partial_fit(X[valid][:: max(1, X.shape[0] // 2000)])
         Xs = self.scaler.transform(X)
 

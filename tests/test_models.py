@@ -149,3 +149,94 @@ def test_zambretti_rain_prior_rises_with_z():
     settled = zambretti(1035.0, 1.5, 6)
     stormy = zambretti(960.0, -2.5, 6)
     assert stormy["prior_rain_prob"] > settled["prior_rain_prob"]
+
+
+# ---------------------------------------------------------------- refit safety
+
+def test_rls_reset_returns_to_the_prior():
+    m = RecursiveLeastSquares(n_features=5, forgetting=0.999, delta=100.0)
+    rng = np.random.default_rng(9)
+    for _ in range(500):
+        m.update(rng.normal(size=5), float(rng.normal()))
+    assert m.n_updates == 500
+    m.reset()
+    assert m.n_updates == 0
+    assert np.allclose(m.theta, 0.0)
+    assert np.allclose(m.P, np.eye(5) * 100.0)
+
+
+def test_rls_delta_survives_serialisation():
+    """A refit after a restart must return to the same prior it started from."""
+    m = RecursiveLeastSquares(n_features=4, forgetting=0.99, delta=100.0)
+    m.update(np.ones(4), 1.0)
+    back = RecursiveLeastSquares.from_dict(m.to_dict())
+    back.reset()
+    assert np.allclose(back.P, np.eye(4) * 100.0), "reload lost the prior"
+
+
+def test_repeated_refits_do_not_accumulate():
+    """Refitting the same history must be idempotent, not cumulative.
+
+    This is the bug that put a 53 C six-hour forecast on a real station in a
+    24 C room. fit() replayed history into a live filter on every retrain tick
+    and never reset, so 453 grid rows had produced 64,676 updates in a day and a
+    half. RLS with forgetting reads each update as fresh evidence, so P
+    collapsed and the weights drifted without bound in the directions the data
+    never excited.
+    """
+    from ashvale.config import CONFIG
+    from ashvale.models.nowcast import NowcastEnsemble
+
+    rng = np.random.default_rng(3)
+    n = 400
+    g = CONFIG.model.grid_s
+    ts = np.arange(n) * g + 1.7554e9
+    cols = {
+        "temperature": 22 + 2 * np.sin(np.arange(n) / 40.0) + 0.2 * rng.normal(size=n),
+        "humidity": 50 + 5 * np.cos(np.arange(n) / 33.0),
+        "pressure": 1013 + np.sin(np.arange(n) / 77.0),
+        "lux": np.clip(300 * np.sin(np.arange(n) / 120.0), 0, None),
+    }
+    X = rng.normal(size=(n, 33))
+    X[:, 0] = 1.0
+    valid = np.ones(n, dtype=bool)
+
+    ens = NowcastEnsemble(CONFIG.model.targets, CONFIG.model.horizons_s, CONFIG.model)
+    head = ens.heads[("temperature", 21600)]
+
+    ens.fit(X, valid, cols, None, ts)
+    first_norm = float(np.linalg.norm(head.model.theta))
+    first_updates = head.model.n_updates
+
+    for _ in range(15):
+        ens.fit(X, valid, cols, None, ts)
+
+    assert head.model.n_updates == first_updates, "updates accumulated across refits"
+    assert float(np.linalg.norm(head.model.theta)) == pytest.approx(first_norm, rel=0.05)
+
+
+def test_annual_harmonics_are_zero_until_the_record_spans_a_season():
+    """Two near-constant, near-collinear columns are a rank-deficient regressor.
+
+    Left on from day one, sin_doy and cos_doy carried +1174 and +1191 on a real
+    station whose median weight was 1.67. Zero is the honest value: a day and a
+    half of data says nothing whatsoever about the season.
+    """
+    from ashvale.features import FEATURE_NAMES, build_features
+
+    n = 450
+    ts = np.arange(n) * 300.0 + 1.7554e9          # about 1.5 days
+    t = 22 + 2 * np.sin(np.arange(n) / 40.0)
+    h = 50 + 5 * np.cos(np.arange(n) / 33.0)
+    p = 1013 + np.sin(np.arange(n) / 77.0)
+    lux = np.clip(300 * np.sin(np.arange(n) / 120.0), 0, None)
+
+    si, ci = FEATURE_NAMES.index("sin_doy"), FEATURE_NAMES.index("cos_doy")
+
+    X, _ = build_features(ts, t, h, p, lux, 300, 52.2, 0.12, min_days_annual=120.0)
+    assert np.all(X[:, si] == 0.0) and np.all(X[:, ci] == 0.0)
+
+    # A record that does span the year keeps them.
+    ts_long = np.arange(n) * (200 * 86400.0 / n) + 1.7554e9
+    X2, _ = build_features(ts_long, t, h, p, lux, 300, 52.2, 0.12, min_days_annual=120.0)
+    assert X2[:, si].std() > 0.1, "annual terms should return once the record is long enough"

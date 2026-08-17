@@ -86,7 +86,8 @@ def main() -> None:
     )
     X, valid = build_features(grid_ts, cols["temperature"], cols["humidity"],
                               cols["pressure"], cols["lux"], cfg.model.grid_s,
-                              cfg.site.latitude, cfg.site.longitude)
+                              cfg.site.latitude, cfg.site.longitude,
+                              cfg.model.climatology_min_days_annual)
 
     n = grid_ts.size
     split = int(n * args.train_frac)
