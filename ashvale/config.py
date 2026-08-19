@@ -126,6 +126,7 @@ class ModelConfig:
     rls_forgetting: float = 0.9985                     # lambda, ~ 11h memory at 5 min
     rls_delta: float = 100.0                           # P0 = delta * I
     conformal_window: int = 400                        # residuals kept per head
+    min_pairs_per_head: int = 12                       # floor before the stride relaxes
     conformal_alpha: float = 0.10                      # 90% intervals
     conformal_gamma: float = 0.01                      # adaptive conformal step
     train_period_s: float = 600.0                      # retrain cadence

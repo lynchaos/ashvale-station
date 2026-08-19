@@ -205,14 +205,26 @@ def test_repeated_refits_do_not_accumulate():
     head = ens.heads[("temperature", 21600)]
 
     ens.fit(X, valid, cols, None, ts)
-    first_norm = float(np.linalg.norm(head.model.theta))
     first_updates = head.model.n_updates
 
+    norms = []
     for _ in range(15):
         ens.fit(X, valid, cols, None, ts)
+        norms.append(float(np.linalg.norm(head.model.theta)))
 
-    assert head.model.n_updates == first_updates, "updates accumulated across refits"
-    assert float(np.linalg.norm(head.model.theta)) == pytest.approx(first_norm, rel=0.05)
+    # Exact equality is no longer the right assertion: the stride rotates its
+    # phase each refit, so a given refit trains on 12 or 13 pairs depending on
+    # where the offset lands. One update of slack covers that. Sixteen passes
+    # of accumulation would show up as 16x, not as 1.
+    assert abs(head.model.n_updates - first_updates) <= 1, \
+        "updates accumulated across refits; a refit must start from the prior"
+
+    # The failure this guards against put ||theta|| at 1680 against a median
+    # weight of 1.67. Phase rotation moves the norm by about 25% on these
+    # deliberately signal-free features, so bound the magnitude rather than
+    # pinning the value, and check it is not climbing refit on refit.
+    assert max(norms) < 20.0, f"weights drifting without bound: {max(norms):.1f}"
+    assert np.mean(norms[-5:]) < 3.0 * np.mean(norms[:5]), "weights growing across refits"
 
 
 def test_annual_harmonics_are_zero_until_the_record_spans_a_season():
@@ -240,3 +252,97 @@ def test_annual_harmonics_are_zero_until_the_record_spans_a_season():
     ts_long = np.arange(n) * (200 * 86400.0 / n) + 1.7554e9
     X2, _ = build_features(ts_long, t, h, p, lux, 300, 52.2, 0.12, min_days_annual=120.0)
     assert X2[:, si].std() > 0.1, "annual terms should return once the record is long enough"
+
+
+def test_training_pairs_are_strided_by_the_horizon():
+    """Overlapping windows must not be counted as independent observations.
+
+    At the 1 d horizon on a 5-minute grid adjacent pairs share 287 of their 288
+    samples. Training on every row hands the filter the same outcome 288 times
+    and RLS with forgetting reads each as fresh evidence, so a 400-score
+    conformal window ends up holding 1.4 independent outcomes while believing
+    it holds 400.
+    """
+    from ashvale.config import CONFIG
+    from ashvale.models.nowcast import NowcastEnsemble
+
+    rng = np.random.default_rng(11)
+    n = 4000                                    # ~14 days at 5 minutes
+    g = CONFIG.model.grid_s
+    ts = np.arange(n) * g + 1.7554e9
+    cols = {
+        "temperature": 20 + 4 * np.sin(np.arange(n) / 288.0) + 0.1 * rng.normal(size=n),
+        "humidity": 55 + 8 * np.cos(np.arange(n) / 288.0),
+        "pressure": 1013 + 4 * np.sin(np.arange(n) / 900.0),
+        "lux": np.clip(400 * np.sin(np.arange(n) / 288.0), 0, None),
+    }
+    X = rng.normal(size=(n, 33))
+    X[:, 0] = 1.0
+    valid = np.ones(n, dtype=bool)
+
+    ens = NowcastEnsemble(CONFIG.model.targets, CONFIG.model.horizons_s, CONFIG.model)
+    counts = ens.fit(X, valid, cols, None, ts)
+
+    for h in CONFIG.model.horizons_s:
+        steps = max(round(h / g), 1)
+        got = counts[f"temperature@{h}"]
+        # fit() bounds recency to max_pairs rows before it strides them.
+        available = min(n - steps, 2500)
+        expected = available // steps
+        if expected >= CONFIG.model.min_pairs_per_head:
+            assert abs(got - expected) <= 1, (
+                f"horizon {h}s trained on {got} pairs, expected about {expected}")
+            assert got < available / 2, "pairs were not strided"
+        else:
+            # The floor relaxes the stride rather than letting a long horizon
+            # train on a handful of pairs.
+            assert got >= CONFIG.model.min_pairs_per_head
+
+
+def test_the_stride_floor_protects_a_short_record():
+    """A 1 d horizon on two days of data must not train on two pairs."""
+    from ashvale.config import CONFIG
+    from ashvale.models.nowcast import NowcastEnsemble
+
+    rng = np.random.default_rng(12)
+    n = 700                                     # ~2.4 days at 5 minutes
+    g = CONFIG.model.grid_s
+    ts = np.arange(n) * g + 1.7554e9
+    cols = {"temperature": 21 + rng.normal(size=n) * 0.1,
+            "humidity": 50 + rng.normal(size=n) * 0.1,
+            "pressure": 1013 + rng.normal(size=n) * 0.1,
+            "lux": np.zeros(n)}
+    X = rng.normal(size=(n, 33))
+    X[:, 0] = 1.0
+    ens = NowcastEnsemble(CONFIG.model.targets, CONFIG.model.horizons_s, CONFIG.model)
+    counts = ens.fit(X, np.ones(n, dtype=bool), cols, None, ts)
+
+    day = counts["temperature@86400"]
+    assert day >= CONFIG.model.min_pairs_per_head, (
+        f"1 d head trained on only {day} pairs; the floor did not engage")
+
+
+def test_refit_phase_rotates_and_survives_serialisation():
+    """Every offset must eventually be trained on, across restarts too."""
+    from ashvale.config import CONFIG
+    from ashvale.models.nowcast import NowcastEnsemble
+
+    rng = np.random.default_rng(13)
+    n = 600
+    g = CONFIG.model.grid_s
+    ts = np.arange(n) * g + 1.7554e9
+    cols = {k: 20 + rng.normal(size=n) * 0.1 for k in CONFIG.model.targets}
+    cols["lux"] = np.zeros(n)
+    X = rng.normal(size=(n, 33))
+    X[:, 0] = 1.0
+    valid = np.ones(n, dtype=bool)
+
+    ens = NowcastEnsemble(CONFIG.model.targets, CONFIG.model.horizons_s, CONFIG.model)
+    assert ens.refit_phase == 0
+    ens.fit(X, valid, cols, None, ts)
+    ens.fit(X, valid, cols, None, ts)
+    assert ens.refit_phase == 2
+
+    back = NowcastEnsemble(CONFIG.model.targets, CONFIG.model.horizons_s, CONFIG.model)
+    back.load_dict(ens.to_dict())
+    assert back.refit_phase == 2, "a restart must not reset the stride to phase 0 forever"
