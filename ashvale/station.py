@@ -49,7 +49,7 @@ from .models.anomaly import AnomalyMonitor
 from .models.climatology import HarmonicClimatology
 from .models.nowcast import NowcastEnsemble
 from .models.precip import PrecipitationModel, proxy_wet_label, zambretti
-from .sensors import OutdoorProbe, SenseBoard, enrich
+from .sensors import OutdoorProbe, SenseBoard, enrich, read_throttled
 from .storage import Store, resample
 
 STATE_VERSION = 1
@@ -67,6 +67,9 @@ class Station:
             longitude=cfg.site.longitude,
         )
         # Optional and entirely absent on a board without one wired up.
+        # Set by the API layer once the LED display exists, so the joystick
+        # can acknowledge a press and cycle scenes. None when there is no HAT.
+        self.display = None
         self.probe = (OutdoorProbe(cfg.sensor.outdoor_probe_period_s)
                       if cfg.sensor.outdoor_probe else None)
         self.tracker = SignalTracker(cfg)
@@ -490,6 +493,22 @@ class Station:
 
     # ------------------------------------------------------------ train
 
+    # 2025-01-01. Any clock below this has not been set since boot, because
+    # this project did not exist before it.
+    CLOCK_FLOOR = 1735689600.0
+
+    def clock_sanity(self) -> Dict[str, Any]:
+        """Is the wall clock usable for anything time-dependent?"""
+        now = time.time()
+        if now < self.CLOCK_FLOOR:
+            return {"ok": False, "now": now,
+                    "reason": "clock is before 2025, so it has not been set since boot"}
+        newest = self.store.newest_ts()
+        if newest is not None and now < newest - 60.0:
+            return {"ok": False, "now": now, "newest": newest,
+                    "reason": f"clock is {newest - now:.0f}s behind the newest stored row"}
+        return {"ok": True, "now": now}
+
     def build_training_grid(self, hours: float = 24 * 30):
         raw = self.store.window(hours, ["ts", "temp_smooth", "hum_smooth",
                                         "press_slp", "lux"])
@@ -513,6 +532,16 @@ class Station:
 
     def train(self, hours: float = 24 * 30) -> Dict:
         t_start = time.time()
+        clock = self.clock_sanity()
+        if not clock["ok"]:
+            # The board has no RTC. A power cut without a network gives a clock
+            # somewhere in 1970 on the next boot, and every feature that depends
+            # on absolute time then lies with total confidence: solar elevation,
+            # the diurnal harmonics, the position of a sample on the 5-minute
+            # grid. Training on that poisons the weights, and unlike a gap in
+            # the record it cannot be spotted afterwards.
+            self.store.log_event("clock", "error", json.dumps(clock))
+            return {"trained": False, "reason": clock["reason"]}
         built = self.build_training_grid(hours)
         if built is None:
             return {"trained": False,
@@ -699,10 +728,61 @@ class Station:
                 self.store.log_event("verify", "error", repr(exc))
             await asyncio.sleep(300)
 
+    # Joystick bindings. Left and right are the two answers to the only
+    # question the precipitation model cannot answer for itself.
+    STICK_LABELS = {"left": 0.0, "right": 1.0}
+    STICK_COLOURS = {0.0: (90, 90, 110), 1.0: (40, 110, 220)}
+
+    async def _loop_joystick(self):
+        """Rain labels without a browser.
+
+        Precipitation is the weakest model in the bank and it is starved of the
+        only thing that would fix it. This station has 80 strong labels against
+        thousands of proxy ones, because the label button lives in a web page
+        and a web page is not where anyone is standing when it starts raining.
+        A button on the device is the whole difference between labelling and
+        intending to label.
+
+        Middle cycles the LED scene, which is the other thing you want from a
+        headless box and otherwise requires a laptop.
+        """
+        while not self._stop.is_set():
+            try:
+                for direction, action in self.board.stick_events():
+                    if action != "pressed":
+                        continue
+                    if direction in self.STICK_LABELS:
+                        value = self.STICK_LABELS[direction]
+                        result = await asyncio.to_thread(
+                            self.add_label, "rain", value, None, "joystick")
+                        self.store.log_event(
+                            "joystick", "info",
+                            json.dumps({"direction": direction, "rain": value,
+                                        "strong_labels": result.get("strong_labels")}))
+                        if self.display is not None:
+                            await asyncio.to_thread(
+                                self.display.flash, self.STICK_COLOURS[value])
+                    elif direction == "middle" and self.display is not None:
+                        name = self.display.next_scene()
+                        self.store.log_event("joystick", "info",
+                                             json.dumps({"scene": name}))
+            except Exception as exc:
+                self.store.log_event("joystick", "error", repr(exc))
+            await asyncio.sleep(0.25)
+
     async def _loop_maintenance(self):
         while not self._stop.is_set():
             await asyncio.sleep(3600)
             now = time.time()
+            # Undervoltage and thermal capping both move the SoC temperature,
+            # which is the input to the self-heating compensation, so a weak
+            # supply shows up as a temperature bias rather than as anything
+            # that looks like a power problem. Recorded so the anomaly is
+            # labelled rather than mysterious.
+            flags = read_throttled()
+            if flags:
+                self.store.log_event("throttled", flags["severity"],
+                                     json.dumps(flags))
             if now - self.last_compact >= self.cfg.storage.vacuum_period_s:
                 try:
                     removed = await asyncio.to_thread(
@@ -723,6 +803,7 @@ class Station:
             asyncio.create_task(self._loop_train()),
             asyncio.create_task(self._loop_verify()),
             asyncio.create_task(self._loop_maintenance()),
+            asyncio.create_task(self._loop_joystick()),
         ]
 
     async def stop(self) -> None:

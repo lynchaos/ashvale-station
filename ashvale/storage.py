@@ -417,6 +417,11 @@ class Store:
         with self._conn() as conn:
             return int(conn.execute("SELECT COUNT(*) FROM telemetry").fetchone()[0])
 
+    def newest_ts(self) -> Optional[float]:
+        with self._conn() as conn:
+            row = conn.execute("SELECT MAX(ts) FROM telemetry").fetchone()
+        return float(row[0]) if row and row[0] is not None else None
+
     def span_days(self) -> float:
         with self._conn() as conn:
             row = conn.execute("SELECT MIN(ts), MAX(ts) FROM telemetry").fetchone()

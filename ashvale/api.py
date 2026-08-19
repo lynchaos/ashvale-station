@@ -61,6 +61,7 @@ async def lifespan(app: FastAPI):
     station.start()
     if CONFIG.server.led_enabled:
         display = LedDisplay(station, CONFIG.server.led_cycle_s, CONFIG.server.led_fps)
+        station.display = display          # lets the joystick drive the panel
         display.start()
     try:
         yield

@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import logging
 import math
+import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -40,6 +41,37 @@ TCS3400_ENABLE = 0x80
 TCS3400_ATIME = 0x81
 TCS3400_CONTROL = 0x8F
 TCS3400_CDATA = 0x94
+
+
+def read_throttled() -> Optional[Dict[str, Any]]:
+    """Raspberry Pi undervoltage and throttling flags, or None if all clear.
+
+    Bit 0 is undervoltage now, 16 is undervoltage since boot, 2 is arm
+    frequency capped, 3 is thermal throttling. A capped or browning-out board
+    runs its SoC at a different temperature, and the SoC temperature is the
+    regressor in the self-heating compensation, so the visible symptom is a
+    temperature bias with no apparent cause.
+    """
+    try:
+        out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True,
+                             text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if "=" not in out:
+        return None
+    try:
+        bits = int(out.split("=", 1)[1], 0)
+    except ValueError:
+        return None
+    if bits == 0:
+        return None
+    now = {0: "undervoltage", 1: "arm_capped", 2: "throttled", 3: "soft_temp_limit"}
+    ever = {16: "undervoltage_since_boot", 17: "arm_capped_since_boot",
+            18: "throttled_since_boot", 19: "soft_temp_limit_since_boot"}
+    active = [name for bit, name in now.items() if bits & (1 << bit)]
+    historic = [name for bit, name in ever.items() if bits & (1 << bit)]
+    return {"raw": hex(bits), "active": active, "since_boot": historic,
+            "severity": "warn" if active else "info"}
 
 
 def read_cpu_temperature() -> float:
@@ -386,6 +418,19 @@ class SenseBoard:
             "gx": gyro["x"], "gy": gyro["y"], "gz": gyro["z"],
             "simulated": False,
         }
+
+    def stick_events(self) -> List[Tuple[str, str]]:
+        """Pending joystick events as (direction, action), oldest first.
+
+        Non-blocking, and returns [] when nothing has happened. The library
+        buffers events, so polling slowly loses none of them.
+        """
+        if self.sense is None:
+            return []
+        try:
+            return [(e.direction, e.action) for e in self.sense.stick.get_events()]
+        except Exception:
+            return []
 
     # --------------------------------------------------------------- LED
 

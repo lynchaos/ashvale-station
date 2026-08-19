@@ -1025,6 +1025,28 @@ class LedDisplay:
         except Exception:
             pass
 
+    def next_scene(self) -> str:
+        """Advance to the next ambient scene, skipping the glyph track."""
+        self._prev = self._current()
+        self._show_glyph = False
+        self._idx = (self._idx + 1) % len(self.scenes)
+        now = time.monotonic()
+        self._fade_started = now
+        self._scene_started = now
+        return type(self.scenes[self._idx]).__name__
+
+    def flash(self, colour, ms: int = 450) -> None:
+        """Blocking confirmation flash. Used to acknowledge a joystick label.
+
+        A headless station gives no other feedback that a press registered, and
+        a button you cannot tell worked gets pressed twice.
+        """
+        try:
+            self.station.board.set_pixels([tuple(colour)] * 64)
+            time.sleep(ms / 1000.0)
+        except Exception:
+            pass
+
     def start(self) -> None:
         self._stop.clear()
         self._task = asyncio.create_task(self._run())

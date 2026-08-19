@@ -122,3 +122,111 @@ def test_calibration_logs_a_discontinuity_marker(client):
     kinds = [e["kind"] for e in client.get("/api/status").json()["events"]]
     assert "discontinuity" in kinds
     client.post("/api/calibrate/humidity", json={"reset": True})
+
+
+# ------------------------------------------------------------ clock guard
+
+def test_training_refuses_a_clock_that_has_not_been_set(tmp_path, monkeypatch):
+    """The board has no RTC.
+
+    A power cut without a network gives a clock somewhere in 1970 on the next
+    boot. Solar elevation, the diurnal harmonics and a sample's position on the
+    5-minute grid all then lie with total confidence, and unlike a gap in the
+    record the damage cannot be spotted afterwards.
+    """
+    import time as _time
+
+    from ashvale.config import load_config
+    from ashvale.station import Station
+
+    cfg = load_config()
+    cfg.storage.db_path = str(tmp_path / "clock.db")
+    st = Station(cfg)
+
+    assert st.clock_sanity()["ok"], "a correct clock must pass"
+
+    monkeypatch.setattr(_time, "time", lambda: 1000.0)      # 1970
+    verdict = st.clock_sanity()
+    assert not verdict["ok"]
+    assert "2025" in verdict["reason"]
+    result = st.train()
+    assert result["trained"] is False
+    # and specifically for the clock, not because the database is empty
+    assert "2025" in result["reason"], result["reason"]
+
+
+def test_training_refuses_a_clock_that_went_backwards(tmp_path, monkeypatch):
+    """NTP stepping backwards past stored data is equally unusable."""
+    import time as _time
+
+    from ashvale.config import load_config
+    from ashvale.station import Station
+
+    cfg = load_config()
+    cfg.storage.db_path = str(tmp_path / "back.db")
+    st = Station(cfg)
+    future = _time.time() + 7200.0
+    st.store.insert_telemetry({"ts": future, "temp_raw": 20.0})
+
+    verdict = st.clock_sanity()
+    assert not verdict["ok"]
+    assert "behind" in verdict["reason"]
+
+
+# ------------------------------------------------------------ joystick
+
+def test_joystick_left_and_right_record_rain_labels(tmp_path):
+    """The button that fixes the precipitation model.
+
+    Strong labels are the binding constraint on that head: 80 against thousands
+    of proxy ones on a real station, because the only label control lives in a
+    web page. Left is dry, right is wet.
+    """
+    import asyncio
+    import sqlite3
+
+    from ashvale.config import load_config
+    from ashvale.station import Station
+
+    cfg = load_config()
+    cfg.storage.db_path = str(tmp_path / "stick.db")
+    st = Station(cfg)
+    st.sample_once()
+
+    pending = [("left", "pressed"), ("right", "pressed"),
+               ("up", "pressed"), ("right", "released")]
+
+    def fake_events():
+        out, pending[:] = list(pending), []
+        return out
+
+    st.board.stick_events = fake_events
+
+    async def one_pass():
+        task = asyncio.create_task(st._loop_joystick())
+        await asyncio.sleep(0.6)
+        st._stop.set()
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    asyncio.run(one_pass())
+
+    with sqlite3.connect(cfg.storage.db_path) as c:
+        rows = sorted(r[0] for r in c.execute("SELECT value FROM labels WHERE kind='rain'"))
+    assert rows == [0.0, 1.0], f"expected one dry and one wet label, got {rows}"
+    # 'up' is unbound and 'released' is not a press: neither may label anything.
+
+
+def test_joystick_survives_a_board_with_no_hat(tmp_path):
+    """The simulator path has no stick. The loop must not spin on exceptions."""
+    from ashvale.config import load_config
+    from ashvale.station import Station
+
+    cfg = load_config()
+    cfg.storage.db_path = str(tmp_path / "nohat.db")
+    st = Station(cfg)
+    assert st.board.stick_events() == []
+    assert st.display is None
