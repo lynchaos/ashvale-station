@@ -346,3 +346,54 @@ def test_refit_phase_rotates_and_survives_serialisation():
     back = NowcastEnsemble(CONFIG.model.targets, CONFIG.model.horizons_s, CONFIG.model)
     back.load_dict(ens.to_dict())
     assert back.refit_phase == 2, "a restart must not reset the stride to phase 0 forever"
+
+
+def test_model_tuning_comes_from_config_not_from_the_state_file():
+    """The same defect that made a Kalman retune silently do nothing.
+
+    RecursiveLeastSquares.from_dict and AdaptiveConformal.from_dict restore
+    lambda, delta, alpha, gamma and the conformal window alongside their data,
+    and load_dict replaces the config-built heads with those. So every one of
+    those knobs was immutable on any station that already had state: edit
+    config.yaml, restart, and the old value comes straight back.
+    """
+    from ashvale.config import load_config
+    from ashvale.models.nowcast import NowcastEnsemble
+
+    cfg = load_config()
+    old = cfg.model
+    ens = NowcastEnsemble(old.targets, old.horizons_s, old)
+    saved = ens.to_dict()
+
+    import copy
+    new = copy.deepcopy(old)
+    new.rls_forgetting = 0.995
+    new.rls_delta = 55.0
+    new.conformal_alpha = 0.20
+    new.conformal_gamma = 0.05
+    new.conformal_window = 250
+
+    back = NowcastEnsemble(new.targets, new.horizons_s, new)
+    back.load_dict(saved)
+    head = next(iter(back.heads.values()))
+    assert head.model.lam == 0.995, "state file pinned the forgetting factor"
+    assert head.model.delta == 55.0, "state file pinned the RLS prior"
+    assert head.conformal.alpha_target == 0.20
+    assert head.conformal.gamma == 0.05
+    assert head.conformal.scores.maxlen == 250
+
+
+def test_loading_state_ignores_heads_this_build_no_longer_has():
+    """A stale state file must not resurrect a retired target or horizon."""
+    from ashvale.config import load_config
+    from ashvale.models.nowcast import NowcastEnsemble
+
+    cfg = load_config().model
+    ens = NowcastEnsemble(cfg.targets, cfg.horizons_s, cfg)
+    saved = ens.to_dict()
+    saved["heads"].append({**saved["heads"][0], "target": "retired_signal"})
+
+    back = NowcastEnsemble(cfg.targets, cfg.horizons_s, cfg)
+    back.load_dict(saved)
+    assert not any(t == "retired_signal" for t, _ in back.heads)
+    assert len(back.heads) == len(cfg.targets) * len(cfg.horizons_s)

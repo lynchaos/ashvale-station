@@ -183,6 +183,20 @@ class AdaptiveConformal:
         self.alpha = float(np.clip(self.alpha + self.gamma * (self.alpha_target - err),
                                    0.005, 0.75))
 
+    def retune(self, alpha: float, gamma: float, window: int) -> None:
+        """Re-apply configured tuning, keeping the observed scores.
+
+        from_dict restores alpha_target, gamma and the window alongside the
+        data, so editing any of them in config.yaml did nothing on a station
+        that already had state: the file put the old values straight back.
+        """
+        self.alpha_target = float(alpha)
+        self.gamma = float(gamma)
+        window = int(window)
+        if self.scores.maxlen != window:
+            self.scores = deque(self.scores, maxlen=window)
+            self.hits = deque(self.hits, maxlen=window)
+
     @property
     def empirical_coverage(self) -> float:
         return float(np.mean(self.hits)) if self.hits else float("nan")

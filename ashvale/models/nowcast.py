@@ -151,6 +151,7 @@ class NowcastEnsemble:
                  cfg_model):
         self.targets = tuple(targets)
         self.horizons = tuple(int(h) for h in horizons_s)
+        self.cfg = cfg_model
         self.grid_s = int(cfg_model.grid_s)
         self.scaler = Standardiser(N_FEATURES)
         self.heads: Dict[Tuple[str, int], ForecastHead] = {
@@ -306,6 +307,27 @@ class NowcastEnsemble:
         self.scaler = Standardiser.from_dict(s["scaler"])
         for hs in s["heads"]:
             head = ForecastHead.from_dict(hs)
-            self.heads[(head.target, head.horizon_s)] = head
+            key = (head.target, head.horizon_s)
+            if key not in self.heads:
+                continue          # a target or horizon this build no longer has
+            self.heads[key] = head
         self.trained_rows = s.get("trained_rows", 0)
         self.refit_phase = int(s.get("refit_phase", 0))
+        self._apply_config_tuning()
+
+    def _apply_config_tuning(self) -> None:
+        """Tuning comes from config; only the estimate comes from the file.
+
+        Every from_dict below this point restores its knobs alongside its data:
+        lambda, delta and p_max in the RLS, alpha, gamma and the window in the
+        conformal calibrator. So each of those was immutable in the field. Edit
+        config.yaml, restart, and the state file quietly puts the old value
+        back, which looks exactly like a change that had no effect. The same
+        defect cost a Kalman retune here before it was found.
+        """
+        c = self.cfg
+        for head in self.heads.values():
+            head.model.lam = float(c.rls_forgetting)
+            head.model.delta = float(c.rls_delta)
+            head.conformal.retune(c.conformal_alpha, c.conformal_gamma,
+                                  c.conformal_window)
