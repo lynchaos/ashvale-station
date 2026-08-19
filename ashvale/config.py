@@ -110,11 +110,29 @@ class SensorConfig:
     hum_offset_min: float = -35.0
     hum_offset_max: float = 35.0
     # Kalman process/measurement noise (per-signal)
-    kalman_q_temp: float = 2.0e-6
+    kalman_q_temp: float = 1.0e-9
     kalman_r_temp: float = 0.02
-    kalman_q_press: float = 1.0e-5
+    # Process noise, retuned against measured sensor noise rather than guessed.
+    #
+    # The originals tracked far faster than any of these signals move. In a
+    # still room the temperature filter reported a median rate of 12.4 C/h
+    # while the air moved 0.37 C/h, and it overshot a real -36 C/h event by
+    # 77%. Sweeping q against the RMSE of the reported rate versus the true
+    # rate, using noise measured on the board (temp 0.088 C, press 0.022 hPa,
+    # hum 0.40 %), puts the minimum about two to three decades lower:
+    #
+    #   temperature  6.45 -> 0.37 C/h RMSE     at 2e-6 -> 1e-9
+    #   pressure     2.15 -> 0.24 hPa/h RMSE   at 1e-5 -> 1e-8
+    #   humidity    27.94 -> 3.55 %/h RMSE     at 5e-5 -> 2e-8
+    #
+    # Tracking does not suffer: lag against a genuine 2 C/h ramp is 0.003 C at
+    # both the old and new values, and peak response to a 5-minute event is
+    # closer to the truth, not further from it. What is lost is response to
+    # sub-minute transients, which for a station forecasting 15 minutes to a
+    # day ahead is noise to reject rather than signal to chase.
+    kalman_q_press: float = 1.0e-8
     kalman_r_press: float = 0.05
-    kalman_q_hum: float = 5.0e-5
+    kalman_q_hum: float = 2.0e-8
     kalman_r_hum: float = 0.60
 
 

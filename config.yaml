@@ -14,8 +14,19 @@ sensor:
   persist_period_s: 30.0
   rotation_deg: 90
   cpu_heat_k: 0.55             # starting point only, calibrate from the dashboard
-  kalman_q_temp: 2.0e-6        # raise to track faster, lower to smooth harder
+  # Process noise. Raise to track faster, lower to smooth harder. These were
+  # retuned against noise measured on a real board by sweeping each q against
+  # the RMSE of the reported rate versus the true rate. The originals tracked
+  # two to three decades faster than any of these signals move: in a still room
+  # the temperature filter reported a median rate of 12.4 C/h while the air
+  # moved 0.4 C/h. All three are listed because this file shadows the defaults
+  # in ashvale/config.py, and a value present here silently wins.
+  kalman_q_temp: 1.0e-9
   kalman_r_temp: 0.02
+  kalman_q_press: 1.0e-8
+  kalman_r_press: 0.05
+  kalman_q_hum: 2.0e-8
+  kalman_r_hum: 0.60
 
 model:
   grid_s: 300

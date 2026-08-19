@@ -248,3 +248,88 @@ def test_forecast_head_migrates_state_from_before_the_setpoint_member():
     # discover a migration bug.
     assert back.member_mae.size == len(MEMBERS)
     back.learn(np.zeros(4), 20.0, 20.5, 0.1, 0.2)      # must not raise
+
+
+# ------------------------------------------------- dual-thermometer fusion
+
+def _bare_board():
+    from ashvale.sensors import SD_HTS221, SD_LPS25HB, SenseBoard, _ChannelNoise
+    b = SenseBoard.__new__(SenseBoard)
+    b._noise_h = _ChannelNoise(SD_HTS221)
+    b._noise_p = _ChannelNoise(SD_LPS25HB)
+    b._gradient = None
+    b._gradient_lam = 0.9967
+    return b
+
+
+def _two_channels(n=4000, seed=5):
+    from ashvale.sensors import K_HTS221, K_LPS25HB
+    rng = np.random.default_rng(seed)
+    cpu = 43.0 + 0.5 * np.sin(np.arange(n) / 500.0)
+    th = (24.0 + K_HTS221 * cpu) / (1 + K_HTS221) + 0.049 * rng.normal(size=n)
+    tp = (24.0 + K_LPS25HB * cpu) / (1 + K_LPS25HB) + 0.007 * rng.normal(size=n)
+    return th, tp
+
+
+def test_fusion_does_not_move_the_mean():
+    """The whole point of removing the gradient first.
+
+    The two chips stand about 1.3 C apart, so weighting them by variance drags
+    temp_raw onto the quieter one. k was fitted against the mean of the two, and
+    after the 1.55x gain of the inverse model that shift becomes about a degree
+    of silent bias on every reading downstream.
+    """
+    th, tp = _two_channels()
+    board = _bare_board()
+    fused = np.array([board._fuse(th[i], tp[i])[0] for i in range(th.size)])
+    avg = (th + tp) / 2.0
+    w = slice(1000, None)
+    assert abs(fused[w].mean() - avg[w].mean()) < 0.01, "fusion shifted the calibration"
+
+
+def test_fusion_is_quieter_than_the_average():
+    th, tp = _two_channels()
+    board = _bare_board()
+    fused = np.array([board._fuse(th[i], tp[i])[0] for i in range(th.size)])
+    avg = (th + tp) / 2.0
+    w = slice(1000, None)
+
+    def wn(x):
+        return np.std(np.diff(x)) / np.sqrt(2)
+
+    assert wn(fused[w]) < wn(avg[w]) / 2.0, "fusion did not halve the noise"
+
+
+def test_fusion_survives_one_dead_channel():
+    board = _bare_board()
+    value, var = board._fuse(float("nan"), 29.5)
+    assert value == 29.5, "a dead HTS221 must not poison the reading"
+    value, var = board._fuse(30.5, float("nan"))
+    assert value == 30.5
+    value, var = board._fuse(float("nan"), float("nan"))
+    assert not np.isfinite(value)
+
+
+def test_kalman_rate_is_physical_in_a_still_room():
+    """The tuning failure this guards against.
+
+    On a real station the temperature filter reported a median rate of
+    12.4 C/h while the room moved 0.37 C/h. Process noise was set to track
+    perhaps a hundred times faster than any of these signals actually move.
+    """
+    from ashvale.config import CONFIG
+    from ashvale.estimation import KalmanCV
+
+    dt = CONFIG.sensor.sample_period_s
+    rng = np.random.default_rng(3)
+    n = 6000
+    truth = 24.0 + 0.4 * np.arange(n) * dt / 3600.0      # a real 0.4 C/h drift
+    z = truth + 0.0877 * rng.normal(size=n)              # measured input noise
+
+    kf = KalmanCV(CONFIG.sensor.kalman_q_temp, CONFIG.sensor.kalman_r_temp)
+    rates = [kf.update(z[i], dt)[1] * 3600.0 for i in range(n)]
+    settled = np.abs(np.array(rates[600:]))
+
+    assert np.median(settled) < 3.0, (
+        f"median |rate| {np.median(settled):.1f} C/h in a room drifting 0.4 C/h")
+    assert np.percentile(settled, 95) < 10.0

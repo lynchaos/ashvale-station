@@ -65,7 +65,41 @@ def read_cpu_temperature() -> float:
 # therefore unchanged and only the per-channel detail is new, which matters
 # because that gradient is a second observation of self-heating.
 K_HTS221, K_LPS25HB = 0.6164, 0.4889
-SD_HTS221, SD_LPS25HB = 0.060, 0.443
+SD_HTS221, SD_LPS25HB = 0.049, 0.007
+
+
+class _ChannelNoise:
+    """Running white-noise variance of one thermometer.
+
+    Taken from the first difference rather than a windowed variance. Over one
+    2 s sample the air moves far less than either chip's own jitter, so
+    var(diff)/2 is the noise and is blind to the weather underneath it. A
+    windowed variance would measure the weather instead and would rise, not
+    fall, on a calm day.
+    """
+
+    def __init__(self, prior_sd: float, lam: float = 0.995, warmup: int = 200):
+        self.var = float(prior_sd) ** 2
+        self.prior = self.var
+        self.lam = float(lam)
+        self.warmup = int(warmup)
+        self.last: Optional[float] = None
+        self.n = 0
+
+    def update(self, value: float) -> float:
+        if not math.isfinite(value):
+            return max(self.var, 1e-8)
+        if self.last is not None:
+            d = value - self.last
+            self.var = self.lam * self.var + (1.0 - self.lam) * (d * d / 2.0)
+            self.n += 1
+        self.last = value
+        if self.n < self.warmup:
+            # Blend toward the prior while the estimate is young, so one quiet
+            # minute cannot hand a channel 100% of the weight on no evidence.
+            w = self.n / float(self.warmup)
+            return max(w * self.var + (1.0 - w) * self.prior, 1e-8)
+        return max(self.var, 1e-8)
 
 
 class SimulatedBoard:
@@ -228,6 +262,13 @@ class SenseBoard:
         self.bus = None
         self.tcs_addr = tcs_addr
         self._sim = SimulatedBoard(latitude, longitude)
+        self._noise_h = _ChannelNoise(SD_HTS221)
+        self._noise_p = _ChannelNoise(SD_LPS25HB)
+        # Slow EWMA of the standing gradient between the two chips. About a
+        # 10-minute time constant at the 2 s cadence: long enough to ignore
+        # per-sample noise, short enough to follow a real change in SoC load.
+        self._gradient: Optional[float] = None
+        self._gradient_lam = 0.9967
 
         try:
             from sense_hat import SenseHat  # type: ignore
@@ -264,6 +305,48 @@ class SenseBoard:
         except Exception:
             return {"clear": 0, "red": 0, "green": 0, "blue": 0, "hex": "#334155", "cct": None}
 
+    def _fuse(self, t_h: float, t_p: float) -> tuple[float, float]:
+        """Combine the two thermometers by inverse variance.
+
+        A plain average of a quiet sensor and a noisy one throws the quiet one
+        away. Measured on the board at 0.5 s: the LPS25HB carries a white-noise
+        sd of 0.007 C against the HTS221's 0.049 C, so optimal weighting is
+        about 98/2 and cuts the raw noise by roughly 3.7x.
+
+        The trap is that the two chips do not agree. They sit at different
+        distances from the SoC and stand about 1.3 C apart, so weighting them
+        by variance would drag temp_raw most of the way onto the LPS25HB and
+        shift it by more than half a degree. The compensator's k was fitted
+        against the mean of the two, and after the 1.55x gain of the inverse
+        model that is a full degree of silent bias on every reading and every
+        forecast built from it.
+
+        So the gradient is tracked and removed before weighting, and only the
+        deviations are fused. The mean is left exactly where the average put
+        it, k stays valid, and the noise still falls. The gradient itself is
+        kept because it is a second observation of self-heating and is what
+        would let k be identified without a reference thermometer.
+        """
+        if not (math.isfinite(t_h) and math.isfinite(t_p)):
+            good = [v for v in (t_h, t_p) if math.isfinite(v)]
+            return (good[0] if good else float("nan")), float("nan")
+
+        var_h = self._noise_h.update(t_h)
+        var_p = self._noise_p.update(t_p)
+
+        gap = t_h - t_p
+        if self._gradient is None:
+            self._gradient = gap
+        else:
+            lam = self._gradient_lam
+            self._gradient = lam * self._gradient + (1.0 - lam) * gap
+
+        # Centre both channels on what the plain average would have reported.
+        half = self._gradient / 2.0
+        w_h, w_p = 1.0 / var_h, 1.0 / var_p
+        fused = (w_h * (t_h - half) + w_p * (t_p + half)) / (w_h + w_p)
+        return float(fused), float(1.0 / (w_h + w_p))
+
     def read(self) -> Dict[str, Any]:
         """One full multi-sensor sample. Raw, uncompensated, untouched."""
         if not self.available:
@@ -276,6 +359,7 @@ class SenseBoard:
         s = self.sense
         t_h = s.get_temperature_from_humidity()
         t_p = s.get_temperature_from_pressure()
+        temp_raw, temp_var = self._fuse(t_h, t_p)
         orientation = s.get_orientation_degrees()
         accel = s.get_accelerometer_raw()
         gyro = s.get_gyroscope_raw()
@@ -285,7 +369,8 @@ class SenseBoard:
             return v - 360.0 if v > 180.0 else v
 
         return {
-            "temp_raw": (t_h + t_p) / 2.0,
+            "temp_raw": temp_raw,
+            "temp_var": temp_var,
             "temp_h": t_h,
             "temp_p": t_p,
             "hum": s.get_humidity(),
