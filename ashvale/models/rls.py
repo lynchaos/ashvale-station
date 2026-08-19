@@ -158,8 +158,22 @@ class AdaptiveConformal:
         self.scores: Deque[float] = deque(maxlen=int(window))
         self.hits: Deque[int] = deque(maxlen=int(window))
 
+    # Fewest scores from which a (1-alpha) empirical quantile exists at all.
+    # For alpha = 0.10 the band is the ceil(0.9*(k+1))-th of k order statistics,
+    # which needs k >= 9. Below that there is no quantile to take and the
+    # Gaussian fallback is the only option.
+    #
+    # This was 20, which is arbitrary and became actively harmful once training
+    # pairs were strided by the horizon: the long-horizon heads then earn about
+    # 13 scores per refit, so twelve of eighteen heads fell through to
+    # 1.645*sigma with sigma taken from an unconstrained x'Px. That produced
+    # bands of +/- 45 C and +/- 115% RH on a young station. They cover, being
+    # far too wide, but a plus or minus of 115% relative humidity is not a
+    # forecast.
+    MIN_SCORES = 9
+
     def quantile(self) -> float:
-        if len(self.scores) < 20:
+        if len(self.scores) < self.MIN_SCORES:
             return float("nan")
         a = float(np.clip(self.alpha, 0.005, 0.75))
         return float(np.quantile(np.asarray(self.scores), 1.0 - a, method="higher"))

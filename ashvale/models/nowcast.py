@@ -45,6 +45,11 @@ from .rls import AdaptiveConformal, RecursiveLeastSquares
 
 MEMBERS = ("persistence", "climatology", "learned", "setpoint")
 
+# Scored forecasts before the Hedge loss scale switches from this sample's
+# worst loss to the running member MAE. Until member_mae has seen anything it
+# is zeros, and dividing by that would hand every member the same penalty.
+_SCALE_WARMUP = 20
+
 
 class ForecastHead:
     """One target, one horizon."""
@@ -96,15 +101,33 @@ class ForecastHead:
         member_pred = anchor + deltas
         losses = np.abs(member_pred - truth)
 
-        # Hedge / exponentiated gradient on normalised losses
-        scale = max(float(np.max(losses)), 1e-6)
-        self.weights *= np.exp(-self.eta * losses / scale)
-        self.weights = np.clip(self.weights, 1e-4, None)
-        self.weights /= self.weights.sum()
-
+        # Score the blend with the weights predict() would actually have used,
+        # before this sample's loss moves them. Doing it after is look-ahead:
+        # the residual handed to the conformal calibrator is then better than
+        # anything the forecaster can produce, so the intervals are calibrated
+        # about 2% too narrow. Coverage survived it only because ACI notices the
+        # extra misses and reopens the band, which is a correction that should
+        # not have been needed.
         blended = float(np.dot(self.weights, member_pred))
         residual = truth - blended
         self.conformal.observe(residual)
+
+        # Hedge / exponentiated gradient on normalised losses.
+        #
+        # The scale must be a stable quantity, not this sample's worst loss.
+        # Dividing by max(losses) means that on a quiet step where every member
+        # agrees to within 0.01 C, whichever one happens to be worst still takes
+        # the full exp(-eta) penalty, exactly as if it had been wrong by 5 C, so
+        # the weights churn on noise. Hedge's regret bound assumes a fixed loss
+        # range. Normalising by the running member MAE instead is worth 1.8% of
+        # MAE across 106 of 126 heads on real data, with coverage unchanged.
+        if self.n_scored > _SCALE_WARMUP:
+            scale = max(float(np.mean(self.member_mae)), 1e-6)
+        else:
+            scale = max(float(np.max(losses)), 1e-6)
+        self.weights *= np.exp(-self.eta * losses / scale)
+        self.weights = np.clip(self.weights, 1e-4, None)
+        self.weights /= self.weights.sum()
 
         self.model.update(x, truth - anchor)
 

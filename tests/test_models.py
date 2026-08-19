@@ -397,3 +397,63 @@ def test_loading_state_ignores_heads_this_build_no_longer_has():
     back.load_dict(saved)
     assert not any(t == "retired_signal" for t, _ in back.heads)
     assert len(back.heads) == len(cfg.targets) * len(cfg.horizons_s)
+
+
+def test_conformal_produces_a_band_from_the_fewest_scores_that_permit_one():
+    """20 was arbitrary and became harmful once pairs were strided.
+
+    The (1-alpha) empirical quantile is the ceil((k+1)(1-alpha))-th of k order
+    statistics, so alpha = 0.10 needs k >= 9. Requiring 20 threw away a valid
+    band at k = 13, which is roughly what a long-horizon head earns per refit
+    after striding, and dropped twelve of eighteen heads onto 1.645*sigma with
+    sigma from an unconstrained x'Px. That produced +/- 115% relative humidity.
+    """
+    from ashvale.models.rls import AdaptiveConformal
+
+    assert AdaptiveConformal.MIN_SCORES == 9
+
+    ac = AdaptiveConformal(alpha=0.10, gamma=0.01)
+    for i in range(8):
+        ac.observe(0.1 * (i + 1), True)
+    assert not np.isfinite(ac.quantile()), "8 scores cannot support a 90% band"
+
+    ac.observe(0.9, True)
+    q = ac.quantile()
+    assert np.isfinite(q), "9 scores must produce a band"
+    assert q > 0
+
+
+def test_strided_heads_do_not_fall_back_to_the_gaussian():
+    """The end-to-end version of the same thing, through a real fit."""
+    from ashvale.config import CONFIG
+    from ashvale.models.climatology import HarmonicClimatology
+    from ashvale.models.nowcast import NowcastEnsemble
+
+    rng = np.random.default_rng(19)
+    n = 700                                    # ~2.4 days, a young station
+    g = CONFIG.model.grid_s
+    ts = np.arange(n) * g + 1.7554e9
+    cols = {
+        "temperature": 22 + 3 * np.sin(np.arange(n) / 288.0) + 0.1 * rng.normal(size=n),
+        "humidity": 50 + 9 * np.cos(np.arange(n) / 288.0),
+        "pressure": 1013 + 2 * np.sin(np.arange(n) / 600.0),
+        "lux": np.clip(400 * np.sin(np.arange(n) / 288.0), 0, None),
+    }
+    X = rng.normal(size=(n, 33))
+    X[:, 0] = 1.0
+    valid = np.ones(n, dtype=bool)
+
+    clim = HarmonicClimatology(CONFIG.model.targets,
+                               min_days_annual=CONFIG.model.climatology_min_days_annual)
+    clim.fit(ts, {k: cols[k] for k in CONFIG.model.targets}, valid)
+    ens = NowcastEnsemble(CONFIG.model.targets, CONFIG.model.horizons_s, CONFIG.model)
+    ens.fit(X, valid, {k: cols[k] for k in CONFIG.model.targets}, clim, ts)
+
+    for (target, h), head in ens.heads.items():
+        q = head.conformal.quantile()
+        assert np.isfinite(q), (
+            f"{target}@{h}s has {len(head.conformal.scores)} scores and no band, "
+            "so it falls back to the Gaussian")
+        # and the band must be physical, not an unconstrained sigma
+        limit = {"temperature": 25.0, "humidity": 60.0, "pressure": 40.0}[target]
+        assert q < limit, f"{target}@{h}s band is +/- {q:.1f}, which is not a forecast"
