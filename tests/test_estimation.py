@@ -333,3 +333,34 @@ def test_kalman_rate_is_physical_in_a_still_room():
     assert np.median(settled) < 3.0, (
         f"median |rate| {np.median(settled):.1f} C/h in a room drifting 0.4 C/h")
     assert np.percentile(settled, 95) < 10.0
+
+
+def test_retuning_q_survives_a_reload():
+    """Tuning lives in config, not in the state file.
+
+    q and r were persisted and restored, so a retune deployed to a running
+    station did nothing: the service restarted and the filters carried on with
+    whatever tuning was in force when the state was last written. The symptom
+    is a config change that appears to work and does not, which is the worst
+    kind.
+    """
+    from ashvale.config import load_config
+    from ashvale.estimation import SignalTracker
+
+    cfg = load_config()
+    cfg.sensor.kalman_q_temp = 2.0e-6          # an old, badly tuned state file
+    old = SignalTracker(cfg)
+    for i in range(50):
+        old.step(1.7554e9 + i * 2.0, 24.0, 50.0, 1013.0, 43.0)
+    saved = old.to_dict()
+    assert saved["filters"]["temperature"]["q"] == 2.0e-6
+
+    cfg.sensor.kalman_q_temp = 1.0e-9          # the retune
+    fresh = SignalTracker(cfg)
+    fresh.load_dict(saved)
+    assert fresh.filters["temperature"].q == 1.0e-9, \
+        "the state file overrode the configured tuning"
+    # the estimate itself must still be carried across
+    assert fresh.filters["temperature"].initialised
+    assert fresh.filters["temperature"].x[0] == pytest.approx(
+        old.filters["temperature"].x[0])

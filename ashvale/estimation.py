@@ -105,12 +105,28 @@ class KalmanCV:
         return {"q": self.q, "r": self.r, "x": self.x.tolist(),
                 "P": self.P.tolist(), "initialised": self.initialised}
 
+    def load_state(self, d: Dict) -> None:
+        """Restore the estimate only, leaving q and r as configured.
+
+        q and r are tuning, not something the filter learned. Taking them from
+        the state file pins whatever values were in force when it was written,
+        so editing them in config.yaml does nothing until someone thinks to
+        delete the state, and nobody thinks to delete the state. That cost a
+        retune here: the new q was deployed, the service restarted, and the
+        filters quietly carried on with the old one.
+
+        P may be inconsistent with a newly changed q. That is harmless: the
+        filter re-converges within a few hundred samples, which is far cheaper
+        than a tuning change that appears to work and does not.
+        """
+        self.x = np.array(d["x"], dtype=float)
+        self.P = np.array(d["P"], dtype=float)
+        self.initialised = bool(d["initialised"])
+
     @classmethod
     def from_dict(cls, d: Dict) -> "KalmanCV":
         kf = cls(q=d["q"], r=d["r"])
-        kf.x = np.array(d["x"], dtype=float)
-        kf.P = np.array(d["P"], dtype=float)
-        kf.initialised = bool(d["initialised"])
+        kf.load_state(d)
         return kf
 
 
@@ -321,7 +337,13 @@ class SignalTracker:
         # Absent from state files written before humidity compensation existed.
         if d.get("hum_compensator"):
             self.hum_compensator = HumidityCompensator.from_dict(d["hum_compensator"])
-        self.filters = {k: KalmanCV.from_dict(v) for k, v in d["filters"].items()}
+        # Deliberately not KalmanCV.from_dict here: that would restore the
+        # persisted q and r over the configured ones. Only the estimate is
+        # restored, and only for filters this build still has.
+        for name, saved in d.get("filters", {}).items():
+            kf = self.filters.get(name)
+            if kf is not None:
+                kf.load_state(saved)
         self.last_ts = d.get("last_ts")
 
 
