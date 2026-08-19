@@ -58,6 +58,12 @@ from ashvale.physics import (  # noqa: E402
     sea_level_pressure,
     solar_position,
 )
+from ashvale.sensors import (  # noqa: E402
+    K_HTS221,
+    K_LPS25HB,
+    SD_HTS221,
+    SD_LPS25HB,
+)
 from ashvale.storage import Store  # noqa: E402
 
 
@@ -130,8 +136,15 @@ def generate(days: float, step_s: int, lat: float, lon: float,
     # model must be its exact inverse:  T_raw = (T + k T_cpu) / (1 + k).
     # Generating it any other way bakes a bias into the synthetic data that
     # no amount of calibration can remove, and quietly caps your skill score.
-    k_true = 0.55
-    temp_raw = (temp + k_true * cpu) / (1.0 + k_true) + 0.05 * rng.normal(size=n)
+    # Two thermometers, not one, because the board has two. Their forward
+    # models average to the k = 0.55 case this used to generate directly, so
+    # temp_raw is unchanged in expectation. Its noise is not: a real board
+    # averages sd 0.060 with sd 0.443 and lands at 0.223, where this used to
+    # claim 0.05. Simulating the quiet sensor and calling it the average is
+    # what let an over-optimistic measurement noise go unnoticed.
+    temp_h = (temp + K_HTS221 * cpu) / (1.0 + K_HTS221) + SD_HTS221 * rng.normal(size=n)
+    temp_p = (temp + K_LPS25HB * cpu) / (1.0 + K_LPS25HB) + SD_LPS25HB * rng.normal(size=n)
+    temp_raw = (temp_h + temp_p) / 2.0
     # If the compensator will move RH from the element temperature onto the air
     # temperature, the forward model here must be its exact inverse, or the
     # synthetic data bakes in a bias no calibration can remove. Same trap as the
@@ -146,7 +159,9 @@ def generate(days: float, step_s: int, lat: float, lon: float,
     press_station += 0.05 * rng.normal(size=n)
 
     return {
-        "ts": ts, "temp": temp, "temp_raw": temp_raw, "rh": rh_sensor + 0.4 * rng.normal(size=n),
+        "ts": ts, "temp": temp, "temp_raw": temp_raw,
+        "temp_h": temp_h, "temp_p": temp_p,
+        "rh": rh_sensor + 0.4 * rng.normal(size=n),
         "press": press_station, "press_slp": press_slp, "cpu": cpu,
         "lux": lux * (0.85 + 0.3 * rng.random(n)), "dew": dew, "cloud": cloud,
     }
@@ -201,6 +216,8 @@ def main() -> None:
         store.insert_telemetry({
             "ts": ts,
             "temp_raw": data["temp_raw"][i],
+            "temp_h": data["temp_h"][i],
+            "temp_p": data["temp_p"][i],
             "temp_c": est["temp_c"],
             "temp_smooth": est["temp_smooth"],
             "temp_rate": est["temp_rate"],

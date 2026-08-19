@@ -35,7 +35,8 @@ TIER_5MIN = 1
 TIER_HOUR = 2
 
 COLUMNS = [
-    "ts", "temp_raw", "temp_c", "temp_smooth", "temp_rate", "hum", "hum_smooth",
+    "ts", "temp_raw", "temp_h", "temp_p", "temp_c", "temp_smooth", "temp_rate",
+    "hum", "hum_smooth",
     "press", "press_slp", "press_smooth", "press_rate", "cpu_temp", "dew_c",
     "lux", "r", "g", "b", "pitch", "roll", "yaw", "compass",
     "ax", "ay", "az", "gx", "gy", "gz",
@@ -97,6 +98,28 @@ class Store:
         self._local = threading.local()
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Add any column COLUMNS has gained since this database was created.
+
+        CREATE TABLE IF NOT EXISTS is a no-op against a table that already
+        exists, so a new entry in COLUMNS reaches a fresh install and silently
+        misses every station that has been running. The failure then surfaces
+        as an OperationalError inside insert_telemetry, which is on the sample
+        loop, so a column addition would take a live station down rather than
+        merely leaving a gap in its record.
+        """
+        have = {row[1] for row in conn.execute("PRAGMA table_info(telemetry)")}
+        if not have:
+            return
+        for col in COLUMNS:
+            if col in have:
+                continue
+            if not col.isidentifier():
+                raise ValueError(f"refusing to splice a non-identifier column: {col!r}")
+            conn.execute(f"ALTER TABLE telemetry ADD COLUMN {col} REAL")
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)

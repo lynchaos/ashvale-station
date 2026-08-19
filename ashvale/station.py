@@ -152,6 +152,8 @@ class Station:
         row = {
             "ts": ts,
             "temp_raw": raw.get("temp_raw"),
+            "temp_h": raw.get("temp_h"),
+            "temp_p": raw.get("temp_p"),
             "temp_c": est["temp_c"],
             "temp_smooth": temp_c,
             "temp_rate": est["temp_rate"],

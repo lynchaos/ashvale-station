@@ -53,6 +53,21 @@ def read_cpu_temperature() -> float:
         return float("nan")
 
 
+# Per-chip thermal coupling to the SoC, and per-chip noise.
+#
+# The Sense HAT carries two independent thermometers at different distances
+# from the SoC, and they are not equally good. Measured over 12 samples on a
+# real board: HTS221 30.973 C at sd 0.060, LPS25HB 29.810 C at sd 0.443, a
+# standing gradient of 1.163 C with the SoC at 44.55 C.
+#
+# These two couplings are chosen so their forward models average to exactly the
+# k = 0.55 the compensator is tuned against. The aggregate behaviour is
+# therefore unchanged and only the per-channel detail is new, which matters
+# because that gradient is a second observation of self-heating.
+K_HTS221, K_LPS25HB = 0.6164, 0.4889
+SD_HTS221, SD_LPS25HB = 0.060, 0.443
+
+
 class SimulatedBoard:
     """Ornstein-Uhlenbeck weather with a diurnal driver. Good enough to
     exercise every code path and to sanity-check a model's skill score."""
@@ -91,9 +106,12 @@ class SimulatedBoard:
         lux = max(0.0, 60000.0 * max(math.sin(math.radians(max(elev, 0.0))), 0.0)) + 8.0
         cpu = temp + 22.0 + 1.5 * self.rng.normal()
         # forward model must invert the compensator exactly, see scripts/simulate.py
-        k_true = 0.55
+        t_h = (temp + K_HTS221 * cpu) / (1.0 + K_HTS221) + SD_HTS221 * self.rng.normal()
+        t_p = (temp + K_LPS25HB * cpu) / (1.0 + K_LPS25HB) + SD_LPS25HB * self.rng.normal()
         return {
-            "temp_raw": (temp + k_true * cpu) / (1.0 + k_true) + 0.05 * self.rng.normal(),
+            "temp_raw": (t_h + t_p) / 2.0,
+            "temp_h": t_h,
+            "temp_p": t_p,
             "hum": rh + 0.4 * self.rng.normal(),
             "press": press + 0.05 * self.rng.normal(),
             "cpu_temp": cpu,
