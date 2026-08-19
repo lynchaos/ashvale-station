@@ -156,7 +156,11 @@ def generate(days: float, step_s: int, lat: float, lon: float,
         rh_sensor = rh
 
     press_station = press_slp / (1.0 + 0.0) - 1.8      # nominal 15 m offset
-    press_station += 0.05 * rng.normal(size=n)
+    # 0.02 hPa, measured on a real LPS25HB as the sd of the change between
+    # 30 s samples. The 0.05 this used to carry made simulated pressure about
+    # twice as noisy as the real thing, which flatters any smoother tested
+    # against it and understates the skill available at short lead.
+    press_station += 0.02 * rng.normal(size=n)
 
     return {
         "ts": ts, "temp": temp, "temp_raw": temp_raw,
