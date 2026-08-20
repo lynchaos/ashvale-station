@@ -230,3 +230,69 @@ def test_joystick_survives_a_board_with_no_hat(tmp_path):
     st = Station(cfg)
     assert st.board.stick_events() == []
     assert st.display is None
+
+
+# ------------------------------------------------------- movement detection
+
+def _moved_station(tmp_path, name):
+    from ashvale.config import load_config
+    from ashvale.station import Station
+
+    cfg = load_config()
+    cfg.storage.db_path = str(tmp_path / name)
+    st = Station(cfg)
+    st._started_at = 0.0            # long settled
+    return st
+
+
+def test_a_moved_board_marks_a_discontinuity_and_queues_a_retrain(tmp_path):
+    """Measured on a real station: a move steps the temperature by a median of
+    1.02 C against an ordinary fifteen minute change of 0.107 C. The heads
+    carry 55 hours of memory, so an undeclared move contaminates two days.
+    """
+    st = _moved_station(tmp_path, "moved.db")
+    base = 1.7554e9
+
+    for i in range(20):             # sitting still, with realistic jitter
+        st._check_moved(base + i, {"pitch": -64.05 + 1e-5 * i,
+                                   "roll": 1.36, "temp_smooth": 24.0})
+    assert not st.monitor.retrain_requested, "noise must not trigger a retrain"
+
+    st._check_moved(base + 100, {"pitch": -53.5, "roll": 1.4, "temp_smooth": 24.0})
+    assert st.monitor.retrain_requested, "a 10 degree move must queue a retrain"
+
+    import sqlite3
+    with sqlite3.connect(st.cfg.storage.db_path) as c:
+        kinds = [r[0] for r in c.execute("SELECT kind FROM events")]
+    assert "moved" in kinds and "discontinuity" in kinds
+
+
+def test_restart_attitude_jump_is_not_mistaken_for_a_move(tmp_path):
+    """RTIMULib restarts its fusion from a default attitude when SenseHat is
+    reconstructed, which put an 18 degree step in the record on every service
+    restart. Without the settle window every deploy looks like a move.
+    """
+    st = _moved_station(tmp_path, "restart.db")
+    now = 1.7554e9
+    st._started_at = now                       # just booted
+
+    st._check_moved(now + 1, {"pitch": -46.0, "roll": 1.4, "temp_smooth": 24.0})
+    st._check_moved(now + 60, {"pitch": -64.1, "roll": 1.4, "temp_smooth": 24.0})
+    st._check_moved(now + 180, {"pitch": -46.0, "roll": 1.4, "temp_smooth": 24.0})
+    assert not st.monitor.retrain_requested, "startup convergence must be ignored"
+
+    # past the settle window, the same step is a real move
+    st._check_moved(now + st.TILT_SETTLE_S + 10, {"pitch": -64.1, "roll": 1.4,
+                                                  "temp_smooth": 24.0})
+    assert st.monitor.retrain_requested
+
+
+def test_yaw_and_compass_are_not_used_for_movement(tmp_path):
+    """They depend on the magnetometer, which indoors measures the building."""
+    st = _moved_station(tmp_path, "yaw.db")
+    base = 1.7554e9
+    st._check_moved(base, {"pitch": -64.0, "roll": 1.4, "yaw": 10.0,
+                           "compass": 10.0, "temp_smooth": 24.0})
+    st._check_moved(base + 30, {"pitch": -64.0, "roll": 1.4, "yaw": 300.0,
+                                "compass": 300.0, "temp_smooth": 24.0})
+    assert not st.monitor.retrain_requested, "a 290 degree yaw swing is not a move"

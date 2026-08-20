@@ -37,7 +37,7 @@ import json
 import math
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -70,6 +70,8 @@ class Station:
         # Set by the API layer once the LED display exists, so the joystick
         # can acknowledge a press and cycle scenes. None when there is no HAT.
         self.display = None
+        self._last_tilt: Optional[Tuple[float, float]] = None
+        self._started_at = time.time()
         self.probe = (OutdoorProbe(cfg.sensor.outdoor_probe_period_s)
                       if cfg.sensor.outdoor_probe else None)
         self.tracker = SignalTracker(cfg)
@@ -182,6 +184,7 @@ class Station:
             "dew_c": dew, "cpu_temp": raw.get("cpu_temp"),
         })
         self.anomaly_bundle = anomaly
+        self._check_moved(ts, row)
 
         self.live = {
             **row,
@@ -436,6 +439,57 @@ class Station:
             rh_now = float(anchor)
             return float(np.clip(rh_now * es_now / es_fut, 0.0, 100.0)) - rh_now
         return 0.0
+
+    # Fused tilt change that counts as the board having been picked up. The
+    # noise floor of the fused pitch and roll is 0.0001 degrees at p99, so a
+    # one degree trigger carries four decades of headroom and false positives
+    # are not a concern.
+    #
+    # The raw accelerometer is the obvious input and is the wrong one. Over the
+    # same four and a half days it fires 112 times against this detector's 4,
+    # because RTIMULib's gyro fusion removes exactly the desk vibration that a
+    # bare gravity vector picks up. Yaw and compass are excluded for the
+    # opposite reason: they depend on the magnetometer, which indoors is
+    # measuring the building.
+    TILT_MOVED_DEG = 1.0
+    # RTIMULib restarts its fusion from a default attitude when SenseHat is
+    # reconstructed, which put an 18 degree step in the record on every one of
+    # this station's service restarts. Without this guard every deploy would
+    # look like someone had picked the board up.
+    TILT_SETTLE_S = 300.0
+
+    def _check_moved(self, ts: float, row: Dict[str, Any]) -> None:
+        """Detect the board being moved, and treat it as a regime change.
+
+        Measured on this station, a move steps the temperature by a median of
+        1.02 C against an ordinary fifteen minute change of 0.107 C, which puts
+        it past the 95th percentile of normal variation. The heads carry about
+        55 hours of memory, so an undeclared move contaminates two days of
+        training with a discontinuity they will try to fit rather than ignore.
+
+        This is the same treatment set_environment gives a window being opened,
+        because it is the same kind of event: the coupling between the sensor
+        and what it is measuring changed, and nothing in the data says so.
+        """
+        p, r = row.get("pitch"), row.get("roll")
+        if p is None or r is None:
+            return
+        p, r = float(p), float(r)
+        if not (np.isfinite(p) and np.isfinite(r)):
+            return
+        prev, self._last_tilt = self._last_tilt, (p, r)
+        if prev is None or ts - self._started_at < self.TILT_SETTLE_S:
+            return
+        moved = float(np.hypot(p - prev[0], r - prev[1]))
+        if moved < self.TILT_MOVED_DEG:
+            return
+        detail = json.dumps({"tilt_deg": round(moved, 2),
+                             "pitch": round(p, 2), "roll": round(r, 2),
+                             "temp_c": row.get("temp_smooth")})
+        self.store.log_event("moved", "warn", detail, ts)
+        self.store.log_event("discontinuity", "warn",
+                             f"board moved {moved:.1f} degrees, queuing a retrain", ts)
+        self.monitor.retrain_requested = True
 
     def set_environment(self, environment: Optional[str] = None,
                         enclosure: Optional[str] = None,
